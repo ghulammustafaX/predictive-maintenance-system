@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+
+  # ─── ZOOKEEPER (required by Kafka) ───────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: pms-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - pms-network
+
+  # ─── KAFKA BROKER ────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: pms-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - pms-network
+
+  # ─── INFLUXDB ─────────────────────────────────────────────────
+  influxdb:
+    image: influxdb:2.7
+    container_name: pms-influxdb
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUXDB_USERNAME}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_PASSWORD}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUXDB_ORG}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUXDB_BUCKET}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN}
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    networks:
+      - pms-network
+
+  # ─── SIMULATOR (Phase 1 — commented out until code is ready) ─
+  # simulator:
+  #   build: ./simulator
+  #   container_name: pms-simulator
+  #   depends_on:
+  #     - kafka
+  #   environment:
+  #     KAFKA_BROKER: kafka:9092
+  #     SENSOR_TOPIC: sensor-telemetry
+  #     BEARING_TOPIC: bearing-telemetry
+  #   volumes:
+  #     - ./simulator/data:/app/data
+  #   networks:
+  #     - pms-network
+
+networks:
+  pms-network:
+    driver: bridge
+
+volumes:
+  influxdb-data:
