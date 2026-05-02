@@ -1,0 +1,1053 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PMS Live Operations</title>
+    <style>
+        :root {
+            --bg: #f6f0e8;
+            --bg-soft: #efe5d8;
+            --surface: rgba(255, 252, 247, 0.85);
+            --surface-strong: #fffaf4;
+            --text: #1f1712;
+            --muted: #6d5f54;
+            --accent: #a3322a;
+            --accent-2: #0f5d63;
+            --accent-3: #c48a2c;
+            --border: rgba(76, 57, 46, 0.14);
+            --shadow: 0 24px 80px rgba(71, 43, 27, 0.12);
+            --radius-xl: 28px;
+            --radius-lg: 22px;
+            --radius-md: 16px;
+            --font-display: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+            --font-body: "Avenir Next", "Segoe UI", "Trebuchet MS", sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html, body {
+            margin: 0;
+            min-height: 100%;
+        }
+
+        body {
+            font-family: var(--font-body);
+            color: var(--text);
+            background:
+                radial-gradient(circle at top left, rgba(163, 50, 42, 0.08), transparent 28%),
+                radial-gradient(circle at top right, rgba(15, 93, 99, 0.09), transparent 22%),
+                linear-gradient(180deg, #fbf7f1 0%, var(--bg) 100%);
+        }
+
+        .page-shell {
+            max-width: 1440px;
+            margin: 0 auto;
+            padding: 24px 24px 40px;
+        }
+
+        .topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+            padding: 20px 24px;
+            background: rgba(255, 250, 244, 0.74);
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            backdrop-filter: blur(14px);
+            box-shadow: 0 10px 40px rgba(76, 57, 46, 0.08);
+            position: relative;
+            top: 23px;
+            z-index: 20;
+            max-width: 1440px;
+            width: calc(100% - 48px);
+            margin: 0 auto;
+        }
+
+        /* Pipeline flow inside navbar */
+        .flow {
+            display: inline-flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 16px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.6);
+            border: 1px solid rgba(76, 57, 46, 0.06);
+        }
+
+        .flow-node {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            border-radius: 999px;
+            color: var(--muted);
+            font-weight: 700;
+            font-size: 0.92rem;
+        }
+
+        .flow-node .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: rgba(76,57,46,0.12);
+            box-shadow: 0 0 0 0 rgba(163,50,42,0.2);
+        }
+
+        .flow-node.active .dot {
+            background: #1d8a4f;
+            animation: nodePulse 900ms ease-out;
+            box-shadow: 0 0 0 8px rgba(29,138,79,0.08);
+        }
+
+        .flow-arrow {
+            font-size: 1.0rem;
+            color: rgba(76,57,46,0.22);
+            user-select: none;
+        }
+
+        @keyframes nodePulse {
+            0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(29,138,79,0.18); }
+            60% { transform: scale(1.25); box-shadow: 0 0 0 10px rgba(29,138,79,0); }
+            100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(29,138,79,0); }
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            min-width: 0;
+        }
+
+        .brand-mark {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background:
+                radial-gradient(circle at 30% 30%, #fff 0 12%, transparent 13%),
+                radial-gradient(circle at 50% 50%, rgba(163, 50, 42, 0.24) 0 35%, transparent 36%),
+                linear-gradient(135deg, #19120f, #6b4b3a);
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+        }
+
+        .brand h1 {
+            margin: 0;
+            font: 700 1.1rem/1 var(--font-display);
+            letter-spacing: 0.02em;
+        }
+
+        .brand p {
+            margin: 3px 0 0;
+            color: var(--muted);
+            font-size: 0.9rem;
+        }
+
+        .nav-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 18px;
+            padding: 10px 16px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.5);
+            border: 1px solid rgba(76, 57, 46, 0.08);
+            color: var(--muted);
+            font-size: 0.95rem;
+        }
+
+        .nav-pill span {
+            white-space: nowrap;
+        }
+
+        .cta {
+            border: none;
+            border-radius: 999px;
+            padding: 13px 20px;
+            background: linear-gradient(135deg, #a3322a, #c74a3d);
+            color: #fff;
+            font-weight: 700;
+            cursor: pointer;
+            box-shadow: 0 16px 30px rgba(163, 50, 42, 0.24);
+            transition: transform 140ms ease, box-shadow 140ms ease;
+        }
+
+        .cta:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 20px 32px rgba(163, 50, 42, 0.3);
+        }
+
+        .hero {
+            display: grid;
+            grid-template-columns: 1.1fr 0.9fr;
+            gap: 26px;
+            align-items: stretch;
+            margin-top: 26px;
+        }
+
+        .hero-copy, .hero-visual, .panel, .feed-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-xl);
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(16px);
+        }
+
+        .hero-copy {
+            padding: 34px;
+            min-height: 440px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero-copy::before {
+            content: "";
+            position: absolute;
+            inset: auto -120px -110px auto;
+            width: 300px;
+            height: 300px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(163, 50, 42, 0.14), transparent 68%);
+            pointer-events: none;
+        }
+
+        .eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 14px;
+            border-radius: 999px;
+            background: rgba(163, 50, 42, 0.08);
+            color: var(--accent);
+            font-size: 0.86rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+
+        .pulse {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: #1d8a4f;
+            box-shadow: 0 0 0 0 rgba(29, 138, 79, 0.4);
+            animation: pulse 1.8s infinite;
+        }
+
+        .hero-copy h2 {
+            margin: 22px 0 14px;
+            font: 700 clamp(2.6rem, 6vw, 5.8rem)/0.92 var(--font-display);
+            letter-spacing: -0.04em;
+            max-width: 10ch;
+        }
+
+        .hero-copy h2 span {
+            color: var(--accent);
+            text-decoration: underline;
+            text-decoration-thickness: 0.12em;
+            text-underline-offset: 0.08em;
+        }
+
+        .hero-copy .lede {
+            max-width: 58ch;
+            color: var(--muted);
+            font-size: 1.05rem;
+            line-height: 1.7;
+            margin-bottom: 26px;
+        }
+
+        .hero-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 14px;
+            margin-bottom: 28px;
+        }
+
+        .secondary {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 13px 18px;
+            border-radius: 999px;
+            border: 1px solid rgba(76, 57, 46, 0.12);
+            color: var(--text);
+            text-decoration: none;
+            background: rgba(255, 255, 255, 0.56);
+        }
+
+        .meta-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            margin-top: auto;
+        }
+
+        .mini-stat {
+            min-width: 160px;
+            padding: 16px 18px;
+            border-radius: var(--radius-md);
+            background: rgba(255, 255, 255, 0.7);
+            border: 1px solid rgba(76, 57, 46, 0.08);
+        }
+
+        .mini-stat .label {
+            color: var(--muted);
+            font-size: 0.82rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .mini-stat .value {
+            margin-top: 10px;
+            font: 700 1.4rem/1.1 var(--font-display);
+        }
+
+        .hero-visual {
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+            background:
+                linear-gradient(180deg, rgba(255, 250, 244, 0.95), rgba(255, 246, 236, 0.86));
+        }
+
+        .visual-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .visual-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 700;
+        }
+
+        .visual-title small {
+            color: var(--muted);
+            display: block;
+            font-weight: 500;
+            margin-top: 3px;
+        }
+
+        .live-timeline {
+            display: grid;
+            gap: 12px;
+            padding: 18px;
+            border-radius: 22px;
+            background: rgba(255, 255, 255, 0.78);
+            border: 1px solid rgba(76, 57, 46, 0.09);
+        }
+
+        .live-timeline .row {
+            display: grid;
+            grid-template-columns: 90px 1fr 90px;
+            gap: 14px;
+            align-items: center;
+        }
+
+        .track {
+            height: 8px;
+            border-radius: 999px;
+            background: rgba(163, 50, 42, 0.1);
+            overflow: hidden;
+            position: relative;
+        }
+
+        .track > span {
+            display: block;
+            height: 100%;
+            border-radius: inherit;
+            background: linear-gradient(90deg, #a3322a, #de8d34);
+        }
+
+        .sensor-matrix {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .sensor-box {
+            padding: 14px;
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.72);
+            border: 1px solid rgba(76, 57, 46, 0.08);
+        }
+
+        .sensor-box .name {
+            color: var(--muted);
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .sensor-box .reading {
+            margin-top: 8px;
+            font: 700 1.1rem/1.1 var(--font-display);
+        }
+
+        .sensor-box .bar {
+            margin-top: 10px;
+            height: 6px;
+            border-radius: 999px;
+            background: rgba(15, 93, 99, 0.1);
+            overflow: hidden;
+        }
+
+        .sensor-box .bar span {
+            display: block;
+            height: 100%;
+            border-radius: inherit;
+            background: linear-gradient(90deg, var(--accent-2), #3aa7b0);
+            width: 50%;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 18px;
+            margin-top: 22px;
+        }
+
+        .metric-card {
+            padding: 20px;
+            border-radius: 22px;
+            background: var(--surface-strong);
+            border: 1px solid var(--border);
+            box-shadow: 0 14px 36px rgba(76, 57, 46, 0.08);
+        }
+
+        .metric-card .tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--muted);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .metric-card .stat {
+            margin-top: 14px;
+            font: 700 clamp(1.7rem, 3vw, 2.55rem)/1 var(--font-display);
+        }
+
+        .metric-card .sub {
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 0.95rem;
+        }
+
+        .content-grid {
+            display: grid;
+            grid-template-columns: 1.35fr 0.65fr;
+            gap: 22px;
+            margin-top: 22px;
+        }
+
+        .panel {
+            padding: 24px;
+        }
+
+        .panel-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            margin-bottom: 16px;
+        }
+
+        .panel-head h3 {
+            margin: 0;
+            font: 700 1.45rem/1.1 var(--font-display);
+        }
+
+        .panel-head p {
+            margin: 6px 0 0;
+            color: var(--muted);
+        }
+
+        .status-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 14px;
+            border-radius: 999px;
+            border: 1px solid rgba(76, 57, 46, 0.08);
+            background: rgba(255, 255, 255, 0.68);
+            color: var(--muted);
+            font-size: 0.9rem;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        thead th {
+            text-align: left;
+            font-size: 0.75rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--muted);
+            padding: 16px 14px;
+            border-bottom: 1px solid rgba(76, 57, 46, 0.1);
+        }
+
+        tbody td {
+            padding: 16px 14px;
+            border-bottom: 1px solid rgba(76, 57, 46, 0.08);
+            font-size: 0.96rem;
+        }
+
+        tbody tr:hover {
+            background: rgba(163, 50, 42, 0.03);
+        }
+
+        .soft {
+            color: var(--muted);
+        }
+
+        .right-column {
+            display: grid;
+            gap: 22px;
+        }
+
+        .feed-list {
+            display: grid;
+            gap: 12px;
+        }
+
+        .feed-item {
+            padding: 16px;
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.72);
+            border: 1px solid rgba(76, 57, 46, 0.08);
+        }
+
+        .feed-item strong {
+            display: block;
+            margin-bottom: 8px;
+        }
+
+        .feed-item small {
+            color: var(--muted);
+            line-height: 1.6;
+        }
+
+        .footer-note {
+            margin-top: 18px;
+            color: var(--muted);
+            font-size: 0.92rem;
+        }
+
+        .quote-card {
+            margin-top: 10px;
+            padding: 18px 20px;
+            border-left: 4px solid var(--accent);
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.62);
+            color: var(--text);
+            box-shadow: 0 12px 28px rgba(76, 57, 46, 0.06);
+        }
+
+        .quote-card blockquote {
+            margin: 0;
+            font: 700 1.05rem/1.7 var(--font-display);
+            letter-spacing: 0.01em;
+        }
+
+        .quote-card cite {
+            display: block;
+            margin-top: 10px;
+            color: var(--muted);
+            font-style: normal;
+            font-size: 0.88rem;
+        }
+
+        .error-box {
+            display: none;
+            margin-top: 18px;
+            padding: 14px 16px;
+            border-radius: 16px;
+            background: rgba(163, 50, 42, 0.08);
+            color: #7e261f;
+            border: 1px solid rgba(163, 50, 42, 0.16);
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(29, 138, 79, 0.45); }
+            70% { box-shadow: 0 0 0 12px rgba(29, 138, 79, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(29, 138, 79, 0); }
+        }
+
+        @media (max-width: 1100px) {
+            .hero,
+            .content-grid,
+            .metrics-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .sensor-matrix {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+
+        @media (max-width: 720px) {
+            .page-shell {
+                padding: 14px 14px 28px;
+            }
+
+            .topbar {
+                flex-direction: column;
+                align-items: stretch;
+                border-radius: 28px;
+            }
+
+            .nav-pill {
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+
+            .hero-copy,
+            .hero-visual,
+            .panel {
+                padding: 20px;
+                border-radius: 24px;
+            }
+
+            .hero-copy h2 {
+                max-width: none;
+            }
+
+            .sensor-matrix,
+            .live-timeline .row {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header class="topbar">
+            <div class="brand">
+                <div class="brand-mark" aria-hidden="true"></div>
+                <div>
+                    <h1>Predictive Maintenance System</h1>
+                    <p>Live telemetry from sensors to Kafka to InfluxDB</p>
+                </div>
+            </div>
+            <div class="nav-pill flow" id="pipelineFlow">
+                <div class="flow-node" id="node-simulator"><div class="dot"></div><span>Simulator</span></div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-node" id="node-kafka"><div class="dot"></div><span>Kafka</span></div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-node" id="node-consumer"><div class="dot"></div><span>Consumer</span></div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-node" id="node-influxdb"><div class="dot"></div><span>InfluxDB</span></div>
+            </div>
+            <button class="cta" id="refreshButton">Refresh live data</button>
+        </header>
+
+    <div class="page-shell">
+
+        <section class="hero">
+            <article class="hero-copy">
+                <div class="eyebrow"><span class="pulse"></span> Live pipeline monitoring</div>
+                <h2>See the <span>sensors</span> move in real time.</h2>
+                <p class="lede">
+                    The dashboard now reads directly from InfluxDB through a small API layer, so the values you see here are the same values being streamed by the simulator, passed through Kafka, and written by the consumer.
+                </p>
+                <div class="hero-actions">
+                    <button class="cta" id="primaryRefresh">Sync dashboard now</button>
+                    <a class="secondary" href="#latest-feed">Jump to live feed <span aria-hidden="true">↓</span></a>
+                </div>
+                <div class="meta-row">
+                    <div class="mini-stat">
+                        <div class="label">API status</div>
+                        <div class="value" id="apiStatus">Connecting</div>
+                    </div>
+                    <div class="mini-stat">
+                        <div class="label">Last update</div>
+                        <div class="value" id="lastUpdate">--</div>
+                    </div>
+                    <div class="mini-stat">
+                        <div class="label">Data source</div>
+                        <div class="value">InfluxDB</div>
+                    </div>
+                </div>
+                <div class="error-box" id="errorBox"></div>
+            </article>
+
+            <aside class="hero-visual">
+                <div class="visual-header">
+                    <div class="visual-title">
+                        <span class="pulse"></span>
+                        <div>
+                            Live snapshot
+                            <small id="snapshotLabel">Waiting for data</small>
+                        </div>
+                    </div>
+                    <div class="status-chip" id="streamBadge">Streaming</div>
+                </div>
+
+                <div class="live-timeline">
+                    <div class="row"><span class="soft">Pipeline</span><div class="track"><span style="width: 100%"></span></div><strong>Kafka → InfluxDB</strong></div>
+                    <div class="row"><span class="soft">Freshness</span><div class="track"><span id="freshnessBar" style="width: 0%"></span></div><strong id="freshnessText">--</strong></div>
+                    <div class="row"><span class="soft">Units</span><div class="track"><span id="unitBar" style="width: 0%"></span></div><strong id="unitText">--</strong></div>
+                </div>
+
+                <div class="sensor-matrix" id="sensorMatrix">
+                    <div class="sensor-box"><div class="name">Sensor 1</div><div class="reading">--</div><div class="bar"><span style="width: 0%"></span></div></div>
+                    <div class="sensor-box"><div class="name">Sensor 2</div><div class="reading">--</div><div class="bar"><span style="width: 0%"></span></div></div>
+                    <div class="sensor-box"><div class="name">Sensor 3</div><div class="reading">--</div><div class="bar"><span style="width: 0%"></span></div></div>
+                    <div class="sensor-box"><div class="name">Sensor 9</div><div class="reading">--</div><div class="bar"><span style="width: 0%"></span></div></div>
+                    <div class="sensor-box"><div class="name">Sensor 14</div><div class="reading">--</div><div class="bar"><span style="width: 0%"></span></div></div>
+                    <div class="sensor-box"><div class="name">Cycle</div><div class="reading">--</div><div class="bar"><span style="width: 0%"></span></div></div>
+                </div>
+            </aside>
+        </section>
+
+        <section class="metrics-grid" aria-label="Live metrics">
+            <div class="metric-card">
+                <div class="tag"><span class="pulse"></span> Stream status</div>
+                <div class="stat" id="streamCount">--</div>
+                <div class="sub">Records visible in the last 24 hours</div>
+            </div>
+            <div class="metric-card">
+                <div class="tag"><span class="pulse"></span> Active units</div>
+                <div class="stat" id="unitCount">--</div>
+                <div class="sub">Unique engine units in the current window</div>
+            </div>
+            <div class="metric-card">
+                <div class="tag"><span class="pulse"></span> Latest cycle</div>
+                <div class="stat" id="latestCycle">--</div>
+                <div class="sub">Most recent engine cycle seen in InfluxDB</div>
+            </div>
+            <div class="metric-card">
+                <div class="tag"><span class="pulse"></span> Freshness</div>
+                <div class="stat" id="freshnessMetric">--</div>
+                <div class="sub">How long ago the last point landed</div>
+            </div>
+        </section>
+
+        <section class="content-grid" id="latest-feed">
+            <article class="panel">
+                <div class="panel-head">
+                    <div>
+                        <h3>Latest sensor feed</h3>
+                        <p>Reconstructed from the latest InfluxDB points and refreshed automatically.</p>
+                    </div>
+                    <div class="status-chip" id="tableStatus"><span class="pulse"></span> Live</div>
+                </div>
+
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Unit</th>
+                            <th>Cycle</th>
+                            <th>Sensor 1</th>
+                            <th>Sensor 2</th>
+                            <th>Sensor 14</th>
+                        </tr>
+                    </thead>
+                    <tbody id="dataTable">
+                        <tr>
+                            <td colspan="6" class="soft" style="text-align:center; padding: 28px;">Loading live telemetry...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </article>
+
+            <aside class="right-column">
+                <section class="panel">
+                    <div class="panel-head">
+                        <div>
+                            <h3>Pipeline story</h3>
+                            <p>What the dashboard is reading from.</p>
+                        </div>
+                    </div>
+                    <div class="feed-list">
+                        <div class="feed-item">
+                            <strong>1. Simulator</strong>
+                            <small>NASA C-MAPSS rows are streamed from the simulator into Kafka.</small>
+                        </div>
+                        <div class="feed-item">
+                            <strong>2. Consumer</strong>
+                            <small>The ingestion service reads Kafka and writes each telemetry point into InfluxDB.</small>
+                        </div>
+                        <div class="feed-item">
+                            <strong>3. Dashboard</strong>
+                            <small>This page polls a backend API that queries the latest data from InfluxDB.</small>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="panel">
+                    <div class="panel-head">
+                        <div>
+                            <h3>Live notes</h3>
+                            <p>Small operational status indicators.</p>
+                        </div>
+                    </div>
+                    <div class="feed-list">
+                        <div class="feed-item">
+                            <strong>Data window</strong>
+                            <small id="windowLabel">Last 24 hours</small>
+                        </div>
+                        <div class="feed-item">
+                            <strong>Backend API</strong>
+                            <small>http://localhost:8000/api/dashboard/live</small>
+                        </div>
+                        <div class="feed-item">
+                            <strong>Status</strong>
+                            <small id="statusNote">Waiting for the first live fetch...</small>
+                        </div>
+                    </div>
+                </section>
+            </aside>
+        </section>
+
+        <div class="footer-note">
+            <!-- If the dashboard is blank, make sure the backend service is running on port 8000 and the InfluxDB bucket contains data. -->
+            <div class="quote-card">
+                <blockquote>
+                    “The best way to predict the future is to invent it.”
+                </blockquote>
+                <cite>Alan Kay</cite>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        const POLL_MS = 5000;
+
+        const state = {
+            limit: 8,
+            values: []
+        };
+
+        const elements = {
+            apiStatus: document.getElementById('apiStatus'),
+            lastUpdate: document.getElementById('lastUpdate'),
+            streamCount: document.getElementById('streamCount'),
+            unitCount: document.getElementById('unitCount'),
+            latestCycle: document.getElementById('latestCycle'),
+            freshnessMetric: document.getElementById('freshnessMetric'),
+            snapshotLabel: document.getElementById('snapshotLabel'),
+            freshnessText: document.getElementById('freshnessText'),
+            unitText: document.getElementById('unitText'),
+            freshnessBar: document.getElementById('freshnessBar'),
+            unitBar: document.getElementById('unitBar'),
+            windowLabel: document.getElementById('windowLabel'),
+            dataTable: document.getElementById('dataTable'),
+            sensorMatrix: document.getElementById('sensorMatrix'),
+            errorBox: document.getElementById('errorBox'),
+            streamBadge: document.getElementById('streamBadge'),
+            tableStatus: document.getElementById('tableStatus'),
+            statusNote: document.getElementById('statusNote')
+        };
+
+        const trackedSensors = ['sensor_1', 'sensor_2', 'sensor_3', 'sensor_9', 'sensor_14'];
+
+        const nf = new Intl.NumberFormat('en-US');
+        const df = new Intl.DateTimeFormat('en-US', {
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+        });
+
+        function valueOrDash(value, digits = 2) {
+            if (value === null || value === undefined || Number.isNaN(Number(value))) {
+                return '--';
+            }
+            const number = Number(value);
+            if (Math.abs(number) >= 1000 || Number.isInteger(number)) {
+                return nf.format(number);
+            }
+            return number.toFixed(digits);
+        }
+
+        function safeInt(value) {
+            const number = Number(value);
+            return Number.isFinite(number) ? Math.round(number) : null;
+        }
+
+        function formatTimestamp(value) {
+            if (!value) {
+                return '--';
+            }
+            const date = new Date(value);
+            return Number.isNaN(date.getTime()) ? '--' : df.format(date);
+        }
+
+        function formatAge(seconds) {
+            if (!Number.isFinite(seconds)) {
+                return '--';
+            }
+            if (seconds < 60) return `${Math.max(1, Math.round(seconds))}s ago`;
+            if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+            return `${Math.round(seconds / 3600)}h ago`;
+        }
+
+        function sensorPercent(value, min = 0, max = 9000) {
+            const number = Number(value);
+            if (!Number.isFinite(number)) return 0;
+            const pct = ((number - min) / (max - min)) * 100;
+            return Math.max(8, Math.min(100, pct));
+        }
+
+        function renderTable(rows) {
+            if (!rows.length) {
+                elements.dataTable.innerHTML = '<tr><td colspan="6" class="soft" style="text-align:center; padding: 28px;">No live records found yet.</td></tr>';
+                return;
+            }
+
+            elements.dataTable.innerHTML = rows.map((row) => `
+                <tr>
+                    <td>${formatTimestamp(row.timestamp)}</td>
+                    <td>${valueOrDash(row.unit_id, 0)}</td>
+                    <td>${valueOrDash(row.time_cycles, 0)}</td>
+                    <td>${valueOrDash(row.sensor_1)}</td>
+                    <td>${valueOrDash(row.sensor_2)}</td>
+                    <td>${valueOrDash(row.sensor_14)}</td>
+                </tr>
+            `).join('');
+        }
+
+        function renderSensors(row) {
+            if (!row) {
+                return;
+            }
+
+            const sensorCards = [...trackedSensors, 'time_cycles'];
+            const cards = elements.sensorMatrix.querySelectorAll('.sensor-box');
+
+            sensorCards.forEach((key, index) => {
+                const box = cards[index];
+                if (!box) return;
+                const reading = box.querySelector('.reading');
+                const bar = box.querySelector('.bar span');
+                const label = key === 'time_cycles' ? 'Cycle' : key.replace('sensor_', 'Sensor ');
+                const value = key === 'time_cycles' ? row.time_cycles : row[key];
+                reading.textContent = valueOrDash(value, 2);
+                bar.style.width = `${key === 'time_cycles' ? sensorPercent(value, 0, 300) : sensorPercent(value)}%`;
+                box.querySelector('.name').textContent = label;
+            });
+        }
+
+        function setOnlineState(isOnline, message) {
+            elements.apiStatus.textContent = isOnline ? 'Live' : 'Offline';
+            elements.apiStatus.style.color = isOnline ? '#1d8a4f' : '#a3322a';
+            elements.streamBadge.textContent = isOnline ? 'Streaming' : 'Disconnected';
+            elements.tableStatus.innerHTML = isOnline
+                ? '<span class="pulse"></span> Live'
+                : '<span class="pulse"></span> Offline';
+            elements.statusNote.textContent = message;
+        }
+
+        function updateDashboard(payload) {
+            const rows = Array.isArray(payload.latest_records) ? payload.latest_records : [];
+            state.values = rows;
+
+            const metrics = payload.metrics || {};
+            const latest = rows[0] || null;
+
+            elements.streamCount.textContent = metrics.record_count ? nf.format(metrics.record_count) : '--';
+            elements.unitCount.textContent = metrics.unique_units ? nf.format(metrics.unique_units) : '--';
+            elements.latestCycle.textContent = latest ? nf.format(safeInt(latest.time_cycles) ?? 0) : '--';
+            elements.freshnessMetric.textContent = payload.latest_age_seconds !== null && payload.latest_age_seconds !== undefined
+                ? formatAge(payload.latest_age_seconds)
+                : '--';
+
+            elements.snapshotLabel.textContent = latest
+                ? `Unit ${valueOrDash(latest.unit_id, 0)} • Cycle ${valueOrDash(latest.time_cycles, 0)}`
+                : 'Waiting for data';
+
+            elements.lastUpdate.textContent = payload.latest_timestamp ? formatTimestamp(payload.latest_timestamp) : '--';
+            elements.freshnessText.textContent = payload.latest_age_seconds !== null && payload.latest_age_seconds !== undefined
+                ? formatAge(payload.latest_age_seconds)
+                : '--';
+            elements.unitText.textContent = latest
+                ? `Unit ${valueOrDash(latest.unit_id, 0)}`
+                : '--';
+            elements.windowLabel.textContent = payload.window_label || 'Last 24 hours';
+
+            elements.freshnessBar.style.width = `${Math.max(12, Math.min(100, 100 - Math.min(100, payload.latest_age_seconds || 0)))}%`;
+            elements.unitBar.style.width = `${metrics.unit_bar_percent || 0}%`;
+
+            renderTable(rows);
+            renderSensors(latest);
+            setOnlineState(true, `Fetched ${rows.length} live rows from InfluxDB.`);
+
+            if (latest) {
+                const values = trackedSensors.map((key) => latest[key]).filter((value) => Number.isFinite(Number(value)));
+                const avg = values.length
+                    ? values.reduce((sum, value) => sum + Number(value), 0) / values.length
+                    : 0;
+                elements.statusNote.textContent = `Last point from unit ${valueOrDash(latest.unit_id, 0)} at cycle ${valueOrDash(latest.time_cycles, 0)}. Sensor average ${avg.toFixed(2)}.`;
+            }
+
+            elements.errorBox.style.display = 'none';
+            animateFlow(payload);
+        }
+
+        function showError(error) {
+            elements.errorBox.textContent = error;
+            elements.errorBox.style.display = 'block';
+            setOnlineState(false, 'Backend API could not be reached.');
+            elements.dataTable.innerHTML = '<tr><td colspan="6" class="soft" style="text-align:center; padding: 28px;">Waiting for live data...</td></tr>';
+        }
+
+        /* Animate pipeline flow: pulse nodes left-to-right on fresh data */
+        function animateFlow(payload) {
+            try {
+                const ids = ['node-simulator', 'node-kafka', 'node-consumer', 'node-influxdb'];
+                const nodes = ids.map((id) => document.getElementById(id)).filter(Boolean);
+                if (!nodes.length) return;
+
+                const stale = payload == null || payload.latest_age_seconds == null || payload.latest_age_seconds > 60;
+                if (stale) {
+                    nodes.forEach(n => n.classList.remove('active'));
+                    return;
+                }
+
+                nodes.forEach((n, idx) => {
+                    // staggered on/off to create a flowing pulse
+                    setTimeout(() => n.classList.add('active'), idx * 220);
+                    setTimeout(() => n.classList.remove('active'), idx * 220 + 900);
+                });
+            } catch (e) {
+                // non-fatal, ignore
+            }
+        }
+
+        async function loadDashboard() {
+            try {
+                const response = await fetch(`${API_BASE}/api/dashboard/live`, { cache: 'no-store' });
+                if (!response.ok) {
+                    throw new Error(`Dashboard API returned ${response.status}`);
+                }
+
+                const payload = await response.json();
+                updateDashboard(payload);
+            } catch (error) {
+                showError(`Live dashboard update failed: ${error.message}`);
+            }
+        }
+
+        document.getElementById('refreshButton').addEventListener('click', loadDashboard);
+        document.getElementById('primaryRefresh').addEventListener('click', loadDashboard);
+
+        loadDashboard();
+        setInterval(loadDashboard, POLL_MS);
+    </script>
+</body>
+</html>

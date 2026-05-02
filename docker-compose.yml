@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
 
   # ─── ZOOKEEPER (required by Kafka) ───────────────────────────
@@ -25,7 +23,7 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     networks:
@@ -49,20 +47,53 @@ services:
     networks:
       - pms-network
 
-  # ─── SIMULATOR (Phase 1 — commented out until code is ready) ─
-  # simulator:
-  #   build: ./simulator
-  #   container_name: pms-simulator
-  #   depends_on:
-  #     - kafka
-  #   environment:
-  #     KAFKA_BROKER: kafka:9092
-  #     SENSOR_TOPIC: sensor-telemetry
-  #     BEARING_TOPIC: bearing-telemetry
-  #   volumes:
-  #     - ./simulator/data:/app/data
-  #   networks:
-  #     - pms-network
+  # ─── DASHBOARD API (InfluxDB query layer) ────────────────────
+  backend:
+    build: ./backend
+    container_name: pms-backend
+    depends_on:
+      - influxdb
+    ports:
+      - "8000:8000"
+    environment:
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUXDB_ORG: ${INFLUXDB_ORG}
+      INFLUXDB_BUCKET: ${INFLUXDB_BUCKET}
+    networks:
+      - pms-network
+
+      # ─── KAFKA CONSUMER → INFLUXDB ──────────────────────────────
+  consumer:
+    build: ./ingestion
+    container_name: pms-consumer
+    depends_on:
+      - kafka
+      - influxdb
+    environment:
+      KAFKA_BROKER: kafka:9092
+      SENSOR_TOPIC: sensor-telemetry
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUXDB_ORG: ${INFLUXDB_ORG}
+      INFLUXDB_BUCKET: ${INFLUXDB_BUCKET}
+    networks:
+      - pms-network
+
+  # ─── SIMULATOR ──────────────────────────────────────────────
+  simulator:
+    build: ./simulator
+    container_name: pms-simulator
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_BROKER: kafka:9092
+      SENSOR_TOPIC: sensor-telemetry
+      BEARING_TOPIC: bearing-telemetry
+    volumes:
+      - ./simulator/data:/app/data
+    networks:
+      - pms-network
 
 networks:
   pms-network:
