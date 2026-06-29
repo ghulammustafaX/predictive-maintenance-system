@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Dashboard - PMS</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=DM+Serif+Display&display=swap"
+        rel="stylesheet">
+    <!-- Share auth page stylesheet -->
+    <link rel="stylesheet" href="../authentication/auth-shared.css">
+    <!-- Modularized dashboard stylesheet -->
+    <link rel="stylesheet" href="dashboard.css">
+    <link rel="icon" type="image/svg+xml" href="../assets/favicon/favicon-light.svg">
+    <!-- Chart.js for real-time ingestion frequency graph -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+</head>
+
+<body>
+
+    <div class="app-layout">
+
+        <!-- Left sidebar navigation like Gemini -->
+        <aside class="sidebar">
+            <div class="sidebar-brand">
+                <img src="../assets/brand/logo-wordmark-light.svg" alt="PMS Portal" class="brand-logo-img brand-logo-light">
+                <img src="../assets/brand/logo-wordmark-dark.svg" alt="PMS Portal" class="brand-logo-img brand-logo-dark">
+                <button class="collapse-btn" id="collapseBtn" aria-label="Collapse sidebar">
+                    <svg viewBox="0 0 24 24" class="collapse-icon" aria-hidden="true">
+                        <path d="M15 18l-6-6 6-6" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </button>
+            </div>
+
+            <nav class="sidebar-nav">
+                <a href="#" class="nav-item active" aria-current="page">
+                    <!-- Dashboard icon -->
+                    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <rect x="3" y="3" width="7" height="9" rx="1" />
+                        <rect x="14" y="3" width="7" height="5" rx="1" />
+                        <rect x="14" y="12" width="7" height="9" rx="1" />
+                        <rect x="3" y="16" width="7" height="5" rx="1" />
+                    </svg>
+                    <span>Dashboard</span>
+                </a>
+
+                <a href="#" class="nav-item disabled" aria-disabled="true">
+                    <!-- Analytics icon -->
+                    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <line x1="18" y1="20" x2="18" y2="10" />
+                        <line x1="12" y1="20" x2="12" y2="4" />
+                        <line x1="6" y1="20" x2="6" y2="14" />
+                    </svg>
+                    <span>Analytics</span>
+                </a>
+
+                <a href="#" class="nav-item disabled" aria-disabled="true">
+                    <!-- Alerts icon -->
+                    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                        <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                    </svg>
+                    <span>Alerts</span>
+                </a>
+
+                <a href="#" class="nav-item disabled" aria-disabled="true">
+                    <!-- Audit Logs icon -->
+                    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                        <polyline points="14 2 14 8 20 8" />
+                        <line x1="16" y1="13" x2="8" y2="13" />
+                        <line x1="16" y1="17" x2="8" y2="17" />
+                        <polyline points="10 9 9 9 8 9" />
+                    </svg>
+                    <span>Audit Logs</span>
+                </a>
+            </nav>
+
+            <!-- User account widget dynamically populated by renderAccountStrip -->
+            <div class="sidebar-footer">
+                <div id="pms-account-strip">
+                    <p class="soft" style="font-size: 0.82rem; margin: 0; text-align: center;">Loading account settings…
+                    </p>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Pane -->
+        <main class="main-content">
+
+            <!-- Header section containing title, status indicator, and sync controls -->
+            <header class="content-header">
+                <div class="header-info">
+                    <div class="api-status-badge">
+                        <span class="pulse" id="apiStatusPulse"></span>
+                        <span id="apiStatus">Connecting</span>
+                    </div>
+                    <h2>Live Operations</h2>
+                    <p>Real-time system telemetry and Kafka ingestion health.</p>
+                </div>
+                <div class="header-actions">
+                    <button class="btn-theme-toggle" id="themeToggleBtn" aria-label="Toggle dark mode">
+                        <svg viewBox="0 0 24 24" class="theme-icon-sun" style="display: none;">
+                            <circle cx="12" cy="12" r="5"></circle>
+                            <line x1="12" y1="1" x2="12" y2="3"></line>
+                            <line x1="12" y1="21" x2="12" y2="23"></line>
+                            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                            <line x1="1" y1="12" x2="3" y2="12"></line>
+                            <line x1="21" y1="12" x2="23" y2="12"></line>
+                            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                        </svg>
+                        <svg viewBox="0 0 24 24" class="theme-icon-moon">
+                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                        </svg>
+                    </button>
+                    <button class="btn-refresh" id="refreshButton" aria-label="Refresh Data">
+                        <svg viewBox="0 0 24 24" class="refresh-icon" aria-hidden="true">
+                            <path
+                                d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15">
+                            </path>
+                        </svg>
+                        <span>Refresh Live</span>
+                    </button>
+                </div>
+            </header>
+
+            <div class="page-shell">
+
+                <!-- Grid of summary metrics (KPIs at top) -->
+                <section class="metrics-grid" aria-label="Live metrics">
+                    <div class="metric-card primary">
+                        <div class="tag"><span class="pulse"></span> Stream status</div>
+                        <div class="stat" id="streamCount">
+                            <div class="skeleton-text" style="width: 50%; height: 2rem; margin: 4px 0;"></div>
+                        </div>
+                        <div class="sub">Records visible in the last 24 hours</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="tag"><span class="pulse"></span> Active units</div>
+                        <div class="stat" id="unitCount">
+                            <div class="skeleton-text" style="width: 40%; height: 2rem; margin: 4px 0;"></div>
+                        </div>
+                        <div class="sub">Unique engine units in the current window</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="tag"><span class="pulse"></span> Latest cycle</div>
+                        <div class="stat" id="latestCycle">
+                            <div class="skeleton-text" style="width: 45%; height: 2rem; margin: 4px 0;"></div>
+                        </div>
+                        <div class="sub">Most recent engine cycle seen in InfluxDB</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="tag"><span class="pulse"></span> Freshness</div>
+                        <div class="stat" id="freshnessMetric">
+                            <div class="skeleton-text" style="width: 55%; height: 2rem; margin: 4px 0;"></div>
+                        </div>
+                        <div class="sub">How long ago the last point landed</div>
+                    </div>
+                </section>
+
+                <!-- Hero section containing system overview and live telemetry visualizer -->
+                <section class="hero">
+                    <article class="hero-copy">
+                        <div class="eyebrow"><span class="pulse"></span> Live Ingestion Activity</div>
+                        <h3>System Overview</h3>
+                        <p class="lede">
+                            Connected to the NASA C-MAPSS dataset simulator. Telemetry flows from the simulator into
+                            Apache Kafka, is parsed by the consumer, and is written directly into InfluxDB.
+                        </p>
+
+                        <!-- Real Chart.js Line Chart -->
+                        <div class="chart-container-wrapper">
+                            <div id="chartNoDataMessage" class="chart-empty-state" style="display: none;">
+                                <!-- Animated flatline SVG -->
+                                <svg class="empty-flatline" viewBox="0 0 400 60" preserveAspectRatio="none">
+                                    <defs>
+                                        <linearGradient id="scanGradLight" x1="0" y1="0" x2="1" y2="0">
+                                            <stop offset="0%" stop-color="#8B2020" stop-opacity="0"/>
+                                            <stop offset="50%" stop-color="#8B2020" stop-opacity="0.25"/>
+                                            <stop offset="100%" stop-color="#8B2020" stop-opacity="0"/>
+                                        </linearGradient>
+                                        <linearGradient id="scanGradDark" x1="0" y1="0" x2="1" y2="0">
+                                            <stop offset="0%" stop-color="#d0d0d0" stop-opacity="0"/>
+                                            <stop offset="50%" stop-color="#d0d0d0" stop-opacity="0.30"/>
+                                            <stop offset="100%" stop-color="#d0d0d0" stop-opacity="0"/>
+                                        </linearGradient>
+                                    </defs>
+                                    <line x1="0" y1="30" x2="400" y2="30" class="flatline-base"/>
+                                    <line x1="0" y1="30" x2="400" y2="30" class="flatline-glow"/>
+                                    <!-- Scanning beam — color toggled via JS on theme switch -->
+                                    <rect class="scan-beam" fill="url(#scanGradLight)" x="-80" y="0" width="80" height="60">
+                                        <animateTransform attributeName="transform" type="translate"
+                                            values="0,0;480,0" dur="2.5s" repeatCount="indefinite"/>
+                                    </rect>
+                                </svg>
+                                <!-- Icon + copy -->
+                                <div class="empty-state-body">
+                                    <div class="empty-icon-ring">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                                        </svg>
+                                    </div>
+                                    <p class="empty-title">Awaiting telemetry signal</p>
+                                </div>
+                            </div>
+                            <div class="chart-header">
+                                <span class="chart-title">Real-Time Ingestion Frequency</span>
+                                <span class="chart-legend"><span class="dot-green"></span> InfluxDB Ingests</span>
+                            </div>
+                            <div class="chartjs-container">
+                                <canvas id="ingestionChart"></canvas>
+                            </div>
+                        </div>
+
+                        <div class="meta-row">
+                            <div class="mini-stat">
+                                <div class="label">Last update</div>
+                                <div class="value" id="lastUpdate">
+                                    <div class="skeleton-text" style="width: 75%; height: 1.25rem;"></div>
+                                </div>
+                            </div>
+                            <div class="mini-stat">
+                                <div class="label">Data source</div>
+                                <div class="value">InfluxDB</div>
+                            </div>
+                        </div>
+                        <div class="error-box" id="errorBox"></div>
+                    </article>
+
+                    <!-- Sidebar details inside hero section -->
+                    <aside class="hero-visual">
+                        <div class="visual-header">
+                            <div class="visual-title">
+                                <span class="pulse"></span>
+                                <div>
+                                    Live snapshot
+                                    <small id="snapshotLabel">Waiting for data</small>
+                                </div>
+                            </div>
+                            <div class="status-chip" id="streamBadge">Streaming</div>
+                        </div>
+
+                        <div class="live-timeline">
+                            <div class="row"><span class="soft">Pipeline</span>
+                                <div class="track" id="pipelineTrack"><span style="width: 100%"></span></div><strong>Kafka →
+                                    InfluxDB</strong>
+                            </div>
+                            <div class="row">
+                                <span class="soft">Freshness</span>
+                                <div class="track"><span id="freshnessBar" style="width: 0%"></span></div>
+                                <strong id="freshnessText">
+                                    <div class="skeleton-text" style="width: 30px; height: 1rem;"></div>
+                                </strong>
+                            </div>
+                            <div class="row">
+                                <span class="soft">Units</span>
+                                <div class="track"><span id="unitBar" style="width: 0%"></span></div>
+                                <strong id="unitText">
+                                    <div class="skeleton-text" style="width: 30px; height: 1rem;"></div>
+                                </strong>
+                            </div>
+                        </div>
+
+                        <!-- Real-time dynamic sensor matrix with skeleton loaders by default -->
+                        <div class="sensor-matrix" id="sensorMatrix">
+                            <div class="sensor-box">
+                                <div class="name">Sensor 1</div>
+                                <div class="reading">
+                                    <div class="skeleton-text" style="width: 50%"></div>
+                                </div>
+                                <div class="bar"><span style="width: 0%"></span></div>
+                            </div>
+                            <div class="sensor-box">
+                                <div class="name">Sensor 2</div>
+                                <div class="reading">
+                                    <div class="skeleton-text" style="width: 55%"></div>
+                                </div>
+                                <div class="bar"><span style="width: 0%"></span></div>
+                            </div>
+                            <div class="sensor-box">
+                                <div class="name">Sensor 3</div>
+                                <div class="reading">
+                                    <div class="skeleton-text" style="width: 45%"></div>
+                                </div>
+                                <div class="bar"><span style="width: 0%"></span></div>
+                            </div>
+                            <div class="sensor-box">
+                                <div class="name">Sensor 9</div>
+                                <div class="reading">
+                                    <div class="skeleton-text" style="width: 50%"></div>
+                                </div>
+                                <div class="bar"><span style="width: 0%"></span></div>
+                            </div>
+                            <div class="sensor-box">
+                                <div class="name">Sensor 14</div>
+                                <div class="reading">
+                                    <div class="skeleton-text" style="width: 60%"></div>
+                                </div>
+                                <div class="bar"><span style="width: 0%"></span></div>
+                            </div>
+                            <div class="sensor-box">
+                                <div class="name">Cycle</div>
+                                <div class="reading">
+                                    <div class="skeleton-text" style="width: 40%"></div>
+                                </div>
+                                <div class="bar"><span style="width: 0%"></span></div>
+                            </div>
+                        </div>
+                    </aside>
+                </section>
+
+                <!-- Detailed telemetry logs and metadata stories -->
+                <section class="content-grid" id="latest-feed">
+                    <article class="panel">
+                        <div class="panel-head">
+                            <div>
+                                <h3>Latest sensor feed</h3>
+                                <p>Reconstructed from the latest InfluxDB points and refreshed automatically.</p>
+                            </div>
+                            <div class="status-chip" id="tableStatus"><span class="pulse"></span> Live</div>
+                        </div>
+
+                        <div class="table-scroll">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Time</th>
+                                        <th>Unit</th>
+                                        <th>Cycle</th>
+                                        <th>Sensor 1</th>
+                                        <th>Sensor 2</th>
+                                        <th>Sensor 14</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="dataTable">
+                                    <tr>
+                                        <td colspan="6" class="soft" style="text-align:center; padding: 28px;">Loading
+                                            live telemetry...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </article>
+
+                    <!-- Technical metadata stories & indicators -->
+                    <aside class="right-column">
+                        <section class="panel">
+                            <div class="panel-head">
+                                <div>
+                                    <h3>Pipeline story</h3>
+                                    <p>What the dashboard is reading from.</p>
+                                </div>
+                            </div>
+                            <div class="feed-list">
+                                <div class="feed-item">
+                                    <div class="step-badge">1</div>
+                                    <div class="feed-content">
+                                        <strong>Simulator</strong>
+                                        <small>NASA C-MAPSS rows are streamed from the simulator into Kafka.</small>
+                                    </div>
+                                </div>
+                                <div class="feed-item">
+                                    <div class="step-badge">2</div>
+                                    <div class="feed-content">
+                                        <strong>Consumer</strong>
+                                        <small>The ingestion service reads Kafka and writes each telemetry point into
+                                            InfluxDB.</small>
+                                    </div>
+                                </div>
+                                <div class="feed-item">
+                                    <div class="step-badge">3</div>
+                                    <div class="feed-content">
+                                        <strong>Dashboard</strong>
+                                        <small>This page polls a backend API that queries the latest data from
+                                            InfluxDB.</small>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="panel">
+                            <div class="panel-head">
+                                <div>
+                                    <h3>Live notes</h3>
+                                    <p>Small operational status indicators.</p>
+                                </div>
+                            </div>
+                            <div class="feed-list">
+                                <div class="feed-item note">
+                                    <div class="note-indicator-dot info"></div>
+                                    <div class="feed-content">
+                                        <strong>Data window</strong>
+                                        <small id="windowLabel">Last 24 hours</small>
+                                    </div>
+                                </div>
+                                <div class="feed-item note">
+                                    <div class="note-indicator-dot code"></div>
+                                    <div class="feed-content">
+                                        <strong>Backend API</strong>
+                                        <small>http://localhost:8000/api/dashboard/live</small>
+                                    </div>
+                                </div>
+                                <div class="feed-item note">
+                                    <div class="note-indicator-dot status" id="liveNoteDot"></div>
+                                    <div class="feed-content">
+                                        <strong>Status</strong>
+                                        <small id="statusNote">Waiting for the first live fetch...</small>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+                    </aside>
+                </section>
+
+                <!-- Premium Dashboard Footer -->
+                <footer class="dashboard-footer">
+                    <div class="footer-divider"></div>
+                    <div class="footer-content">
+                        <div class="footer-quote">
+                            “The best way to predict the future is to invent it.” <span class="quote-author">— Alan Kay</span>
+                        </div>
+                        <div class="footer-copyright">
+                            &copy; 2026 Predictive Maintenance System
+                        </div>
+                    </div>
+                </footer>
+
+            </div>
+        </main>
+    </div>
+
+    <!-- Configure Authentication Paths relative to frontend/dashboard/ -->
+    <script>
+        window.PMS_LOGIN_PATH = '../authentication/login.html';
+        window.PMS_CHANGE_PASSWORD_PATH = '../authentication/change-password.html';
+        window.PMS_PROFILE_PATH = '../authentication/profile.html';
+    </script>
+
+    <!-- Shared Auth token store and HTTP client -->
+    <script src="../authentication/auth-shared.js" defer></script>
+
+    <!-- Modularized Dashboard client code -->
+    <script src="dashboard.js" defer></script>
+</body>
+
+</html>

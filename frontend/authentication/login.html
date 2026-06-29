@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sign In</title>
+    <link rel="stylesheet" href="auth-shared.css">
+    <link rel="icon" type="image/svg+xml" href="../assets/favicon/favicon-light.svg">
+    <!-- Google Identity Services -->
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body class="auth-page-body">
+    <div class="auth-shell">
+        <div class="auth-card">
+            <h2>Welcome back</h2>
+            <p class="subtitle">Sign in to view live telemetry and predictions.</p>
+
+            <div class="banner error" id="errorBanner"></div>
+
+            <form id="loginForm">
+                <div class="field">
+                    <label for="email">Email</label>
+                    <input type="email" id="email" name="email" required autocomplete="email" placeholder="you@company.com">
+                </div>
+                <div class="field">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" required autocomplete="current-password" placeholder="••••••••">
+                </div>
+                <button class="cta" type="submit" id="submitButton">Sign in</button>
+            </form>
+
+            <!-- Google Sign-In divider + button -->
+            <div class="auth-divider" id="googleDivider" style="display:none;">or</div>
+            <div id="googleBtnContainer" style="display:none; margin-top: 4px;"></div>
+
+            <p class="auth-links">
+                <a href="forgot-password.html">Forgot password?</a>
+                &nbsp;&middot;&nbsp;
+                Don't have an account? <a href="register.html">Register</a>
+            </p>
+        </div>
+    </div>
+
+    <script src="auth-shared.js"></script>
+    <script>
+        const form          = document.getElementById('loginForm');
+        const errorBanner   = document.getElementById('errorBanner');
+        const submitButton  = document.getElementById('submitButton');
+
+        function showError(message) {
+            errorBanner.textContent = message;
+            errorBanner.classList.add('visible');
+        }
+
+        /* ── Email / password login ─────────────────────────────────── */
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            errorBanner.classList.remove('visible');
+            submitButton.disabled = true;
+            submitButton.textContent = 'Signing in…';
+
+            const email    = document.getElementById('email').value.trim();
+            const password = document.getElementById('password').value;
+
+            try {
+                const response = await fetch(`${API_BASE}/api/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password }),
+                });
+                const data = await response.json();
+
+                if (!response.ok) { showError(data.detail || 'Could not sign in.'); return; }
+
+                Auth.saveTokens(data.access_token, data.refresh_token);
+                window.location.href = DASHBOARD_PATH;
+            } catch {
+                showError('Could not reach the server. Is the backend running?');
+            } finally {
+                submitButton.disabled = false;
+                submitButton.textContent = 'Sign in';
+            }
+        });
+
+        /* ── Google Sign-In ─────────────────────────────────────────── */
+        async function handleGoogleCredential(response) {
+            errorBanner.classList.remove('visible');
+            try {
+                const res = await fetch(`${API_BASE}/api/auth/google`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id_token: response.credential }),
+                });
+                const data = await res.json();
+                if (!res.ok) { showError(data.detail || 'Google sign-in failed.'); return; }
+                Auth.saveTokens(data.access_token, data.refresh_token);
+                window.location.href = DASHBOARD_PATH;
+            } catch {
+                showError('Could not reach the server. Is the backend running?');
+            }
+        }
+
+        async function initGoogleSignIn() {
+            try {
+                const res = await fetch(`${API_BASE}/api/auth/config`);
+                if (!res.ok) return;
+                const { google_client_id } = await res.json();
+                if (!google_client_id) return;
+
+                // Reveal UI elements
+                document.getElementById('googleDivider').style.display = '';
+                document.getElementById('googleBtnContainer').style.display = '';
+
+                // Detect dark mode for button theme
+                const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+
+                google.accounts.id.initialize({
+                    client_id: google_client_id,
+                    callback: handleGoogleCredential,
+                });
+                google.accounts.id.renderButton(
+                    document.getElementById('googleBtnContainer'),
+                    {
+                        theme: isDark ? 'filled_black' : 'outline',
+                        size: 'large',
+                        shape: 'rectangular',
+                        width: 388,   /* matches card inner width */
+                        text: 'signin_with',
+                        logo_alignment: 'center',
+                    }
+                );
+            } catch { /* Google SDK unavailable — silently skip */ }
+        }
+
+        // Wait for Google SDK then initialise
+        window.addEventListener('load', initGoogleSignIn);
+    </script>
+</body>
+</html>

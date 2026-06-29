@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Create Account</title>
+    <link rel="stylesheet" href="auth-shared.css">
+    <link rel="icon" type="image/svg+xml" href="../assets/favicon/favicon-light.svg">
+    <!-- Google Identity Services -->
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body class="auth-page-body">
+    <div class="auth-shell">
+        <div class="auth-card">
+            <h2>Create your account</h2>
+            <p class="subtitle">You'll get a confirmation email after registering.</p>
+
+            <div class="banner error"   id="errorBanner"></div>
+            <div class="banner success" id="successBanner"></div>
+
+            <form id="registerForm">
+                <div class="field">
+                    <label for="fullName">Full name</label>
+                    <input type="text" id="fullName" name="fullName" required autocomplete="name" placeholder="Jane Engineer">
+                </div>
+                <div class="field">
+                    <label for="email">Email</label>
+                    <input type="email" id="email" name="email" required autocomplete="email" placeholder="you@company.com">
+                </div>
+                <div class="field">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" required autocomplete="new-password" placeholder="••••••••">
+                </div>
+
+                <div class="field" id="confirmPasswordFieldContainer" style="display: none; margin-top: 16px;">
+                    <label for="confirmPassword">Re-enter password</label>
+                    <input type="password" id="confirmPassword" name="confirmPassword" placeholder="••••••••">
+                    <p class="password-rules" id="confirmPasswordError" style="display: none; margin-top: 4px; font-size: 0.8rem; font-weight: 500;"></p>
+                </div>
+
+                <p class="password-rules" id="passwordRules">
+                    Must be 8+ characters with an uppercase letter, lowercase letter, digit, and special character.
+                </p>
+                <button class="cta" type="submit" id="submitButton">Create account</button>
+            </form>
+
+            <!-- Google Sign-In divider + button -->
+            <div class="auth-divider" id="googleDivider" style="display:none;">or sign up with</div>
+            <div id="googleBtnContainer" style="display:none; margin-top: 4px;"></div>
+
+            <p class="auth-links">
+                Already have an account? <a href="login.html">Sign in</a>
+            </p>
+        </div>
+    </div>
+
+    <script src="auth-shared.js"></script>
+    <script>
+        const form                    = document.getElementById('registerForm');
+        const errorBanner             = document.getElementById('errorBanner');
+        const successBanner           = document.getElementById('successBanner');
+        const submitButton            = document.getElementById('submitButton');
+        const passwordInput           = document.getElementById('password');
+        const passwordRules           = document.getElementById('passwordRules');
+        const confirmFieldContainer   = document.getElementById('confirmPasswordFieldContainer');
+        const confirmPasswordInput    = document.getElementById('confirmPassword');
+        const confirmPasswordError    = document.getElementById('confirmPasswordError');
+
+        function showError(message) {
+            successBanner.classList.remove('visible');
+            errorBanner.textContent = message;
+            errorBanner.classList.add('visible');
+        }
+
+        function showSuccess(message) {
+            errorBanner.classList.remove('visible');
+            successBanner.textContent = message;
+            successBanner.classList.add('visible');
+        }
+
+        passwordInput.addEventListener('input', () => {
+            const value = passwordInput.value;
+
+            confirmFieldContainer.style.display = value.length > 0 ? 'block' : 'none';
+            if (value.length === 0) {
+                confirmPasswordInput.value = '';
+                confirmPasswordError.style.display = 'none';
+            }
+
+            const checks = [
+                [value.length >= 8,          '8+ characters'],
+                [/[A-Z]/.test(value),        'an uppercase letter'],
+                [/[a-z]/.test(value),        'a lowercase letter'],
+                [/\d/.test(value),           'a digit'],
+                [/[^A-Za-z0-9]/.test(value), 'a special character'],
+            ];
+            const missing = checks.filter(([ok]) => !ok).map(([, label]) => label);
+            passwordRules.textContent = missing.length ? `Still needs: ${missing.join(', ')}.` : 'Looks good!';
+            passwordRules.style.color = missing.length ? 'var(--error)' : 'var(--success)';
+
+            if (confirmPasswordInput.value.length > 0) validateConfirmPassword();
+        });
+
+        function validateConfirmPassword() {
+            const match = confirmPasswordInput.value === passwordInput.value;
+            if (confirmPasswordInput.value.length === 0) {
+                confirmPasswordError.style.display = 'none';
+            } else if (!match) {
+                confirmPasswordError.textContent = 'Passwords do not match.';
+                confirmPasswordError.style.color = 'var(--error)';
+                confirmPasswordError.style.display = 'block';
+            } else {
+                confirmPasswordError.textContent = 'Passwords match!';
+                confirmPasswordError.style.color = 'var(--success)';
+                confirmPasswordError.style.display = 'block';
+            }
+        }
+
+        confirmPasswordInput.addEventListener('input', validateConfirmPassword);
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            errorBanner.classList.remove('visible');
+            successBanner.classList.remove('visible');
+
+            if (passwordInput.value !== confirmPasswordInput.value) {
+                showError('Passwords do not match.');
+                return;
+            }
+
+            submitButton.disabled = true;
+            submitButton.textContent = 'Creating account…';
+
+            const full_name = document.getElementById('fullName').value.trim();
+            const email     = document.getElementById('email').value.trim();
+            const password  = passwordInput.value;
+
+            try {
+                const response = await fetch(`${API_BASE}/api/auth/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ full_name, email, password }),
+                });
+                const data = await response.json();
+
+                if (!response.ok) {
+                    const detail = Array.isArray(data.detail)
+                        ? data.detail.map(d => d.msg).join(', ')
+                        : data.detail;
+                    showError(detail || 'Could not create account.');
+                    return;
+                }
+
+                showSuccess('Account created! Check your email for a confirmation link, then sign in.');
+                form.reset();
+                confirmFieldContainer.style.display = 'none';
+                confirmPasswordError.style.display  = 'none';
+                passwordRules.textContent = 'Must be 8+ characters with an uppercase letter, lowercase letter, digit, and special character.';
+                passwordRules.style.color = 'var(--muted)';
+            } catch {
+                showError('Could not reach the server. Is the backend running?');
+            } finally {
+                submitButton.disabled = false;
+                submitButton.textContent = 'Create account';
+            }
+        });
+
+        /* ── Google Sign-In ─────────────────────────────────────────── */
+        async function handleGoogleCredential(response) {
+            errorBanner.classList.remove('visible');
+            try {
+                const res = await fetch(`${API_BASE}/api/auth/google`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id_token: response.credential }),
+                });
+                const data = await res.json();
+                if (!res.ok) { showError(data.detail || 'Google sign-up failed.'); return; }
+                Auth.saveTokens(data.access_token, data.refresh_token);
+                window.location.href = DASHBOARD_PATH;
+            } catch {
+                showError('Could not reach the server. Is the backend running?');
+            }
+        }
+
+        async function initGoogleSignIn() {
+            try {
+                const res = await fetch(`${API_BASE}/api/auth/config`);
+                if (!res.ok) return;
+                const { google_client_id } = await res.json();
+                if (!google_client_id) return;
+
+                document.getElementById('googleDivider').style.display    = '';
+                document.getElementById('googleBtnContainer').style.display = '';
+
+                const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+
+                google.accounts.id.initialize({
+                    client_id: google_client_id,
+                    callback: handleGoogleCredential,
+                });
+                google.accounts.id.renderButton(
+                    document.getElementById('googleBtnContainer'),
+                    {
+                        theme: isDark ? 'filled_black' : 'outline',
+                        size: 'large',
+                        shape: 'rectangular',
+                        width: 388,
+                        text: 'signup_with',
+                        logo_alignment: 'center',
+                    }
+                );
+            } catch { /* Google SDK unavailable — silently skip */ }
+        }
+
+        window.addEventListener('load', initGoogleSignIn);
+    </script>
+</body>
+</html>

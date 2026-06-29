@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Verify Email</title>
+    <link rel="stylesheet" href="auth-shared.css">
+    <link rel="icon" type="image/svg+xml" href="../assets/favicon/favicon-light.svg">
+</head>
+<body class="auth-page-body">
+    <div class="auth-shell">
+        <div class="auth-card">
+            <h2 id="title">Confirming your email…</h2>
+            <p class="subtitle" id="subtitle">One moment.</p>
+
+            <div class="banner error" id="errorBanner"></div>
+            <div class="banner success" id="successBanner"></div>
+
+            <p class="auth-links">
+                <a href="login.html">Go to sign in</a>
+            </p>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        const title = document.getElementById('title');
+        const subtitle = document.getElementById('subtitle');
+        const errorBanner = document.getElementById('errorBanner');
+        const successBanner = document.getElementById('successBanner');
+
+        const token = new URLSearchParams(window.location.search).get('token');
+
+        async function verify() {
+            if (!token) {
+                title.textContent = 'Missing verification token';
+                subtitle.textContent = '';
+                errorBanner.textContent = 'This link is missing its token. Please check the link in your email.';
+                errorBanner.classList.add('visible');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/api/auth/verify-email?token=${encodeURIComponent(token)}`);
+                const data = await response.json();
+
+                if (!response.ok) {
+                    title.textContent = 'Verification failed';
+                    subtitle.textContent = '';
+                    errorBanner.textContent = data.detail || 'This link is invalid or has expired.';
+                    errorBanner.classList.add('visible');
+                    return;
+                }
+
+                title.textContent = 'Email confirmed';
+                subtitle.textContent = '';
+                successBanner.textContent = data.message;
+                successBanner.classList.add('visible');
+            } catch (err) {
+                title.textContent = 'Could not verify';
+                subtitle.textContent = '';
+                errorBanner.textContent = 'Could not reach the server. Is the backend running?';
+                errorBanner.classList.add('visible');
+            }
+        }
+
+        verify();
+    </script>
+</body>
+</html>
