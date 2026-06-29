@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Profile Settings — Predictive Maintenance System</title>
+    <link rel="stylesheet" href="auth-shared.css">
+    <link rel="icon" type="image/svg+xml" href="../assets/favicon/favicon-light.svg">
+    <style>
+        .profile-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .profile-row:last-child { border-bottom: none; }
+        .profile-row .label {
+            color: var(--muted);
+            font-size: 0.85rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .profile-row .value {
+            font-weight: 700;
+            text-align: right;
+        }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 0.8rem;
+            font-weight: 700;
+        }
+        .badge.verified { background: rgba(29, 138, 79, 0.1); color: var(--success); }
+        .badge.unverified { background: rgba(196, 138, 44, 0.15); color: var(--accent-3); }
+        .profile-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 24px;
+        }
+        .profile-actions .cta { flex: 1 1 auto; text-align: center; text-decoration: none; }
+        .profile-actions .account-signout-btn { flex: 1 1 auto; }
+    </style>
+</head>
+<body class="auth-page-body">
+    <div class="auth-shell" style="max-width: 480px;">
+        <div class="auth-card">
+            <h2>Profile settings</h2>
+            <p class="subtitle">Your account details and quick actions.</p>
+
+            <div id="profileContent">
+                <p class="subtitle">Loading your profile…</p>
+            </div>
+
+            <div class="profile-actions">
+                <a class="cta" href="change-password.html">Change password</a>
+                <button class="account-signout-btn" id="signOutButton" type="button" style="padding: 13px 20px;">Sign out</button>
+            </div>
+
+            <p class="auth-links">
+                <a href="../dashboard/index.html">Back to dashboard</a>
+            </p>
+        </div>
+    </div>
+
+    <script>
+        window.PMS_LOGIN_PATH = 'login.html';
+    </script>
+    <script src="auth-shared.js"></script>
+    <script>
+        Auth.requireAuth();
+
+        async function loadProfile() {
+            const user = await Auth.fetchMe();
+            const content = document.getElementById('profileContent');
+            if (!user) {
+                content.innerHTML = '<p class="subtitle">Could not load your profile.</p>';
+                return;
+            }
+
+            const verifiedBadge = user.is_verified
+                ? '<span class="badge verified">Verified</span>'
+                : '<span class="badge unverified">Not verified</span>';
+
+            const joined = new Date(user.created_at);
+            const joinedLabel = Number.isNaN(joined.getTime())
+                ? '--'
+                : joined.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+
+            content.innerHTML = `
+                <div class="profile-row">
+                    <span class="label">Full name</span>
+                    <span class="value">${user.full_name}</span>
+                </div>
+                <div class="profile-row">
+                    <span class="label">Email</span>
+                    <span class="value">${user.email}</span>
+                </div>
+                <div class="profile-row">
+                    <span class="label">Role</span>
+                    <span class="value" style="text-transform: capitalize;">${user.role.replace('_', ' ')}</span>
+                </div>
+                <div class="profile-row">
+                    <span class="label">Email status</span>
+                    <span class="value">${verifiedBadge}</span>
+                </div>
+                <div class="profile-row">
+                    <span class="label">Member since</span>
+                    <span class="value">${joinedLabel}</span>
+                </div>
+            `;
+        }
+
+        document.getElementById('signOutButton').addEventListener('click', () => {
+            Auth.logout();
+        });
+
+        loadProfile();
+    </script>
+</body>
+</html>

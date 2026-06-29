@@ -181,12 +181,6 @@ cython_debug/
 # Learn more at https://abstra.io/docs
 .abstra/
 
-# Visual Studio Code
-#  Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
-#  that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
-#  and can be added to the global gitignore or merged into this file. However, if you prefer, 
-#  you could uncomment the following to ignore the entire vscode folder
-# .vscode/
 
 # Ruff stuff:
 .ruff_cache/
@@ -194,10 +188,50 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
-# Cursor
-#  Cursor is an AI-powered code editor. `.cursorignore` specifies files/directories to
-#  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
-#  refer to https://docs.cursor.com/context/ignore-files
+# Project-specific: regenerable ML artifacts
+ml/saved/
+
+# Google OAuth client secret downloads — never commit these
+client_secret_*.json
+
+# Test files and databases
+*test*.py
+*test*.db
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files
+*temp*.py
+*temp*.db
+*.tmp
+*.bak
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Documentation (large files, generated from source)
+docs/*.png
+docs/*.jpg
+docs/*.pdf
+implementation_plan.md
+commands.md
+
+# Frontend dependencies and build artifacts
+node_modules/
+dist/
+build/
+*.log
+
+# Large asset files (optional - uncomment if needed)
+# frontend/assets/brand/*.png
+# frontend/assets/favicon/*.svg
+
 .cursorignore
 .cursorindexingignore
 
@@ -209,3 +243,5 @@ __marimo__/
 # Datasets - download separately
 simulator/data/cmapss/
 simulator/data/ims/
+
+commands.md
