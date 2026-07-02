@@ -134,8 +134,10 @@ celerybeat.pid
 # SageMath parsed files
 *.sage.py
 
-# Environments
+# Environments - SENSITIVE: Contains API keys, secrets, database credentials
 .env
+.env.*
+!.env.example
 .envrc
 .venv
 env/
@@ -143,6 +145,9 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+**/.env
+**/backend/.env
+**/frontend/.env
 
 # Spyder project settings
 .spyderproject
@@ -188,11 +193,107 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
-# Project-specific: regenerable ML artifacts
-ml/saved/
+# ═══════════════════════════════════════════════════════════════════
+# PROJECT-SPECIFIC SECURITY & DATA FILES
+# ═══════════════════════════════════════════════════════════════════
 
-# Google OAuth client secret downloads — never commit these
+# Sensitive credentials and secrets
 client_secret_*.json
+*secret*.json
+*credentials*.json
+*.pem
+*.key
+*.cert
+*.p12
+*.pfx
+service-account*.json
+
+# API Keys and Tokens (extra safety)
+*api_key*
+*api-key*
+*apikey*
+*token*
+*secret*
+!*secret*.example
+!*token*.example
+
+# ML Training Data & Artifacts (large, regenerable)
+ml/saved/
+ml/data/raw/
+ml/data/processed/
+ml/data/cmapss/
+ml/preprocessing/models/
+ml/feature_engineering/models/
+ml/prediction/models/
+ml/anomaly_detection/models/
+ml/checkpoints/
+ml/logs/
+ml/runs/
+ml/outputs/
+
+# Dataset files (large binary files)
+*.npz
+*.npy
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+*.parquet
+*.feather
+*.arrow
+*.tfrecord
+*.csv
+*.tsv
+*.xlsx
+*.xls
+!requirements*.txt
+!*example*.csv
+!*sample*.csv
+
+# Model files (large)
+*.pt
+*.pth
+*.ckpt
+*.pb
+*.onnx
+*.tflite
+*.mlmodel
+*.joblib
+*.sav
+*.model
+**/models/*.pt
+**/models/*.pth
+**/checkpoints/
+
+# Simulator data
+simulator/data/
+simulator/data/cmapss/
+simulator/data/ims/
+simulator/outputs/
+simulator/logs/
+
+# Ingestion data
+ingestion/data/
+ingestion/logs/
+
+# Backend sensitive data
+backend/data/
+backend/uploads/
+backend/backups/
+backend/*.db
+backend/*.sqlite
+backend/*.sqlite3
+backend/logs/
+backend/secrets/
+
+# Kafka & Streaming data
+**/kafka-data/
+**/zookeeper-data/
+**/streams/
+
+# Docker sensitive volumes
+**/volumes/
+**/docker-volumes/
 
 # Test files and databases
 *test*.py
@@ -200,6 +301,8 @@ client_secret_*.json
 *.db
 *.sqlite
 *.sqlite3
+test_*.db
+*_test.db
 
 # Temporary files
 *temp*.py
@@ -215,12 +318,47 @@ client_secret_*.json
 *~
 .DS_Store
 
-# Documentation (large files, generated from source)
+# Documentation (large files, generated from source, temporary notes)
 docs/*.png
 docs/*.jpg
 docs/*.pdf
+
+# Temporary and working documentation files
 implementation_plan.md
 commands.md
+test_*.md
+*_SUMMARY.md
+*_FIX_*.md
+*_NOTES.md
+*_TODO.md
+*_DRAFT.md
+scratch.md
+notes.md
+temp*.md
+TODO.md
+NOTES.md
+DRAFT.md
+
+# Working documents (Word, Excel, etc.)
+*.docx
+*.doc
+*.pptx
+*.ppt
+*_TEMP.docx
+*_DRAFT.docx
+~$*.docx
+~$*.doc
+~$*.pptx
+
+# Keep important documentation (explicitly NOT ignored)
+!README.md
+!SECURITY.md
+!SETUP.md
+!LICENSE.md
+!CHANGELOG.md
+!CONTRIBUTING.md
+!docs/README.md
+!docs/**/*.md
 
 # Frontend dependencies and build artifacts
 node_modules/

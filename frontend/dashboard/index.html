@@ -442,7 +442,12 @@
     </script>
 
     <!-- Shared Auth token store and HTTP client -->
-    <script src="../authentication/auth-shared.js" defer></script>
+    <script src="../authentication/auth-shared.js"></script>
+
+    <!-- Auth guard: redirect to login if not authenticated -->
+    <script>
+        Auth.requireAuth();
+    </script>
 
     <!-- Modularized Dashboard client code -->
     <script src="dashboard.js" defer></script>
