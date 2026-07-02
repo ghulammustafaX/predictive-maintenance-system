@@ -133,6 +133,20 @@ const elements = {
     ingestionChartCanvas: document.getElementById('ingestionChart')
 };
 
+// Log missing elements for debugging
+console.log('[Dashboard] Initializing elements...');
+const missingElements = [];
+for (const [key, value] of Object.entries(elements)) {
+    if (value === null) {
+        missingElements.push(key);
+    }
+}
+if (missingElements.length > 0) {
+    console.warn('[Dashboard] Missing elements:', missingElements);
+} else {
+    console.log('[Dashboard] All elements found ✓');
+}
+
 const trackedSensors = ['sensor_1', 'sensor_2', 'sensor_3', 'sensor_9', 'sensor_14'];
 
 const nf = new Intl.NumberFormat('en-US');
@@ -488,66 +502,79 @@ function setOnlineState(isOnline, message) {
 }
 
 function updateDashboard(payload) {
-    const rows = Array.isArray(payload.latest_records) ? payload.latest_records : [];
-    state.values = rows;
+    try {
+        const rows = Array.isArray(payload.latest_records) ? payload.latest_records : [];
+        state.values = rows;
 
-    const metrics = payload.metrics || {};
-    const latest = rows[0] || null;
+        const metrics = payload.metrics || {};
+        const latest = rows[0] || null;
 
-    // We got data, so mark it online
-    state.lastSuccessTime = new Date();
-    setOnlineState(true, 'System operating normally.');
+        // We got data, so mark it online
+        state.lastSuccessTime = new Date();
+        setOnlineState(true, 'System operating normally.');
 
-    elements.streamCount.textContent = metrics.record_count ? nf.format(metrics.record_count) : '--';
-    elements.unitCount.textContent = metrics.unique_units ? nf.format(metrics.unique_units) : '--';
-    elements.latestCycle.textContent = latest ? nf.format(safeInt(latest.time_cycles) ?? 0) : '--';
-    elements.freshnessMetric.textContent = payload.latest_age_seconds !== null && payload.latest_age_seconds !== undefined
-        ? formatAge(payload.latest_age_seconds)
-        : '--';
+        elements.streamCount.textContent = metrics.record_count ? nf.format(metrics.record_count) : '--';
+        elements.unitCount.textContent = metrics.unique_units ? nf.format(metrics.unique_units) : '--';
+        elements.latestCycle.textContent = latest ? nf.format(safeInt(latest.time_cycles) ?? 0) : '--';
+        elements.freshnessMetric.textContent = payload.latest_age_seconds !== null && payload.latest_age_seconds !== undefined
+            ? formatAge(payload.latest_age_seconds)
+            : '--';
 
-    elements.snapshotLabel.textContent = latest
-        ? `Unit ${valueOrDash(latest.unit_id, 0)} • Cycle ${valueOrDash(latest.time_cycles, 0)}`
-        : 'Waiting for data';
+        elements.snapshotLabel.textContent = latest
+            ? `Unit ${valueOrDash(latest.unit_id, 0)} • Cycle ${valueOrDash(latest.time_cycles, 0)}`
+            : 'Waiting for data';
 
-    elements.lastUpdate.textContent = payload.latest_timestamp ? formatTimestamp(payload.latest_timestamp) : '--';
-    elements.freshnessText.textContent = payload.latest_age_seconds !== null && payload.latest_age_seconds !== undefined
-        ? formatAge(payload.latest_age_seconds)
-        : '--';
-    elements.unitText.textContent = latest
-        ? `Unit ${valueOrDash(latest.unit_id, 0)}`
-        : '--';
-    elements.windowLabel.textContent = payload.window_label || 'Last 24 hours';
+        elements.lastUpdate.textContent = payload.latest_timestamp ? formatTimestamp(payload.latest_timestamp) : '--';
+        elements.freshnessText.textContent = payload.latest_age_seconds !== null && payload.latest_age_seconds !== undefined
+            ? formatAge(payload.latest_age_seconds)
+            : '--';
+        elements.unitText.textContent = latest
+            ? `Unit ${valueOrDash(latest.unit_id, 0)}`
+            : '--';
+        elements.windowLabel.textContent = payload.window_label || 'Last 24 hours';
 
-    elements.freshnessBar.style.width = `${Math.max(12, Math.min(100, 100 - Math.min(100, payload.latest_age_seconds || 0)))}%`;
-    elements.unitBar.style.width = `${metrics.unit_bar_percent || 0}%`;
+        elements.freshnessBar.style.width = `${Math.max(12, Math.min(100, 100 - Math.min(100, payload.latest_age_seconds || 0)))}%`;
+        elements.unitBar.style.width = `${metrics.unit_bar_percent || 0}%`;
 
-    // Dynamic ingestion rate calculation
-    if (state.lastRecordCount && metrics.record_count) {
-        const diff = metrics.record_count - state.lastRecordCount;
-        const rate = Math.max(0, diff / (POLL_MS / 1000));
-        elements.ingestionRate.textContent = rate > 0 ? `${rate.toFixed(1)} rec/s` : '1.0 rec/s';
-    } else {
-        elements.ingestionRate.textContent = '1.0 rec/s';
+        // Dynamic ingestion rate calculation
+        if (elements.ingestionRate) {
+            if (state.lastRecordCount && metrics.record_count) {
+                const diff = metrics.record_count - state.lastRecordCount;
+                const rate = Math.max(0, diff / (POLL_MS / 1000));
+                elements.ingestionRate.textContent = rate > 0 ? `${rate.toFixed(1)} rec/s` : '1.0 rec/s';
+            } else {
+                elements.ingestionRate.textContent = '1.0 rec/s';
+            }
+        }
+        state.lastRecordCount = metrics.record_count || null;
+
+        renderTable(rows);
+        renderSensors(latest);
+
+        // Feed the real-time Chart.js ingestion chart
+        updateIngestionChart(metrics.record_count ?? null, true);
+
+        setOnlineState(true, `Fetched ${rows.length} live rows from InfluxDB.`);
+
+        if (latest) {
+            const values = trackedSensors.map((key) => latest[key]).filter((value) => Number.isFinite(Number(value)));
+            const avg = values.length
+                ? values.reduce((sum, value) => sum + Number(value), 0) / values.length
+                : 0;
+            elements.statusNote.textContent = `Last point from unit ${valueOrDash(latest.unit_id, 0)} at cycle ${valueOrDash(latest.time_cycles, 0)}. Sensor average ${avg.toFixed(2)}.`;
+        }
+
+        elements.errorBox.style.display = 'none';
+    } catch (error) {
+        console.error('[Dashboard] updateDashboard error:', error);
+        // Find which element is null
+        for (const [key, value] of Object.entries(elements)) {
+            if (value === null) {
+                console.error(`[Dashboard] Missing element: ${key}`);
+            }
+        }
+        throw error; // Re-throw so it's handled by loadDashboard's catch
     }
-    state.lastRecordCount = metrics.record_count || null;
-
-    renderTable(rows);
-    renderSensors(latest);
-
-    // Feed the real-time Chart.js ingestion chart
-    updateIngestionChart(metrics.record_count ?? null, true);
-
-    setOnlineState(true, `Fetched ${rows.length} live rows from InfluxDB.`);
-
-    if (latest) {
-        const values = trackedSensors.map((key) => latest[key]).filter((value) => Number.isFinite(Number(value)));
-        const avg = values.length
-            ? values.reduce((sum, value) => sum + Number(value), 0) / values.length
-            : 0;
-        elements.statusNote.textContent = `Last point from unit ${valueOrDash(latest.unit_id, 0)} at cycle ${valueOrDash(latest.time_cycles, 0)}. Sensor average ${avg.toFixed(2)}.`;
-    }
-
-    elements.errorBox.style.display = 'none';
 }
 
 function showError(error) {
@@ -564,8 +591,10 @@ async function loadDashboard() {
         }
 
         const payload = await response.json();
+        console.log('[Dashboard] Received payload:', payload); // Debug log
         updateDashboard(payload);
     } catch (error) {
+        console.error('[Dashboard] Load failed:', error); // Debug log
         showError(`Live dashboard update failed: ${error.message}`);
     }
 }

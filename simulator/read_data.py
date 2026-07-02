@@ -26,6 +26,4 @@ def load_cmapss_data(file_name):
     return df
 
 if __name__ == "__main__":
-    # Tum kisi bhi file ka naam yahan pass kar sakte ho 
-    # (e.g., 'train_FD001.txt', 'test_FD002.txt', ya 'RUL_FD001.txt')
     dataset = load_cmapss_data("train_FD001.txt")

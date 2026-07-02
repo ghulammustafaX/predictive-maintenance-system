@@ -1,0 +1,78 @@
+# Auto detect text files and normalize line endings to LF
+* text=auto eol=lf
+
+# Source code
+*.py text eol=lf
+*.js text eol=lf
+*.ts text eol=lf
+*.jsx text eol=lf
+*.tsx text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.scss text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.sh text eol=lf
+
+# Docker files
+Dockerfile text eol=lf
+*.dockerfile text eol=lf
+docker-compose*.yml text eol=lf
+
+# Configuration files
+.env* text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+
+# Binary files - never modify
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg binary
+*.pdf binary
+
+# ML/Data files - binary, no diff
+*.npz binary
+*.npy binary
+*.pkl binary
+*.pickle binary
+*.h5 binary
+*.hdf5 binary
+*.pt binary
+*.pth binary
+*.ckpt binary
+*.pb binary
+*.onnx binary
+*.parquet binary
+*.feather binary
+*.arrow binary
+
+# Database files - binary
+*.db binary
+*.sqlite binary
+*.sqlite3 binary
+
+# Archives
+*.zip binary
+*.tar binary
+*.gz binary
+*.tgz binary
+*.bz2 binary
+*.7z binary
+
+# Fonts
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.eot binary
+
+# Mark generated files (linguist)
+ml/saved/* linguist-generated=true
+ml/data/processed/* linguist-generated=true
+frontend/dist/* linguist-generated=true

@@ -137,6 +137,7 @@ def health() -> dict[str, Any]:
 
 @app.get("/api/dashboard/live")
 def live_dashboard(user: User = Depends(require_role(UserRole.ADMIN, UserRole.MAINTENANCE_ENGINEER, UserRole.VIEWER))) -> dict[str, Any]:
+    print(f"[Dashboard API] Request from user: {user.email} (role: {user.role.value})")  # Debug log
     client = get_client()
     try:
         query_api = client.query_api()
@@ -146,7 +147,7 @@ def live_dashboard(user: User = Depends(require_role(UserRole.ADMIN, UserRole.MA
         age_seconds = freshness_seconds(latest_ts)
         unique_unit_count = len({row.get("unit_id") for row in rows if row.get("unit_id") is not None})
 
-        return {
+        result = {
             "window_label": WINDOW_LABEL,
             "metrics": {
                 "record_count": len(rows),
@@ -158,5 +159,7 @@ def live_dashboard(user: User = Depends(require_role(UserRole.ADMIN, UserRole.MA
             "latest_records": rows[:8],
             "latest_record": latest,
         }
+        print(f"[Dashboard API] Returning {len(rows)} records, {unique_unit_count} units")  # Debug log
+        return result
     finally:
         client.close()

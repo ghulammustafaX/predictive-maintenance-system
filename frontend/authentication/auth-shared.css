@@ -508,6 +508,32 @@ body.auth-page-body {
     background: var(--border);
 }
 
+/* ── Google Sign-In Button ──────────────────────────────────────── */
+#googleBtnContainer {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+/* Fix Google logo white background in dark mode */
+[data-theme="dark"] #googleBtnContainer iframe {
+    filter: brightness(0.95) contrast(1.05);
+}
+
+/* Override Google button container styles for better dark mode appearance */
+[data-theme="dark"] #googleBtnContainer div[role="button"] {
+    background-color: var(--surface-raised) !important;
+    border: 1px solid var(--border) !important;
+    box-shadow: var(--shadow-sm) !important;
+    transition: all var(--transition);
+}
+
+[data-theme="dark"] #googleBtnContainer div[role="button"]:hover {
+    background-color: var(--surface) !important;
+    border-color: rgba(255,255,255,0.16) !important;
+    box-shadow: var(--shadow-md) !important;
+}
+
 /* ── Responsive ─────────────────────────────────────────────────── */
 @media (max-width: 520px) {
     body.auth-page-body { padding: 20px 16px; }
