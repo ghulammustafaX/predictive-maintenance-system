@@ -46,13 +46,29 @@ def _prep_split_scaled(sub_dataset: str):
     test_raw = loader.load_test(sub_dataset)
     true_rul = loader.load_rul(sub_dataset)
 
-    train_clean = prep.clip_outliers(prep.handle_missing_values(train_raw), OUTLIER_Z_THRESHOLD)
-    test_clean = prep.clip_outliers(prep.handle_missing_values(test_raw), OUTLIER_Z_THRESHOLD)
-
-    train_labeled = prep.assign_rul_train(train_clean)
-    test_labeled = prep.assign_rul_test(test_clean, true_rul)
+    train_labeled = prep.assign_rul_train(prep.handle_missing_values(train_raw))
+    test_labeled = prep.assign_rul_test(
+        prep.handle_missing_values(test_raw), true_rul
+    )
 
     train_split, val_split = prep.split_by_unit(train_labeled)
+    stats = prep.fit_training_stats(train_split, sub_dataset)
+    medians = {column: values["median"] for column, values in stats.items()}
+    train_split = prep.clip_outliers(
+        prep.handle_missing_values(train_split, medians),
+        OUTLIER_Z_THRESHOLD,
+        stats,
+    )
+    val_split = prep.clip_outliers(
+        prep.handle_missing_values(val_split, medians),
+        OUTLIER_Z_THRESHOLD,
+        stats,
+    )
+    test_labeled = prep.clip_outliers(
+        prep.handle_missing_values(test_labeled, medians),
+        OUTLIER_Z_THRESHOLD,
+        stats,
+    )
 
     scaler = prep.fit_scaler(train_split, sub_dataset)
     train_scaled = prep.apply_scaler(train_split, scaler)

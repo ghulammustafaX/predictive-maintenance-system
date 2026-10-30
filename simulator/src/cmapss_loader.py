@@ -18,8 +18,8 @@ load_dotenv()
 # Configuration
 KAFKA_BROKER = os.getenv('KAFKA_BROKER', 'kafka:9092')
 SENSOR_TOPIC = os.getenv('SENSOR_TOPIC', 'sensor-telemetry')
-DATA_PATH = '/app/data/cmapss/train_FD001.txt'
-# DATA_PATH = 'data/cmapss/train_FD001.txt'
+DATASET_ID = os.getenv('DATASET_ID', 'FD001').upper()
+DATA_PATH = f'/app/data/cmapss/train_{DATASET_ID}.txt'
 STREAM_INTERVAL = 1.0  # seconds between each row
 
 # Column names for C-MAPSS dataset
@@ -82,7 +82,10 @@ def stream_data_to_kafka(df, producer):
             payload = row.to_dict()
             
             # Replace NaN with None for JSON serialization
-            payload = {k: (None if pd.isna(v) else float(v)) for k, v in payload.items()}
+            payload = {
+                'dataset_id': DATASET_ID,
+                **{k: (None if pd.isna(v) else float(v)) for k, v in payload.items()},
+            }
             
             # Send to Kafka
             future = producer.send(SENSOR_TOPIC, value=payload)

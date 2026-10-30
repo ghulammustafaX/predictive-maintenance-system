@@ -21,6 +21,7 @@ Design notes
 from __future__ import annotations
 
 import pickle
+import json
 from dataclasses import dataclass
 
 import numpy as np
@@ -30,6 +31,7 @@ from sklearn.preprocessing import MinMaxScaler
 from ml.config import (
     RANDOM_SEED,
     RUL_CAP,
+    OUTLIER_Z_THRESHOLD,
     SCALER_DIR,
     SENSOR_COLUMNS,
     SETTING_COLUMNS,
@@ -43,7 +45,10 @@ FEATURE_COLUMNS = SETTING_COLUMNS + SENSOR_COLUMNS
 # ---------------------------------------------------------------------------
 # Sub-module: Missing Value Handler
 # ---------------------------------------------------------------------------
-def handle_missing_values(df: pd.DataFrame) -> pd.DataFrame:
+def handle_missing_values(
+    df: pd.DataFrame,
+    fallback_medians: dict[str, float] | None = None,
+) -> pd.DataFrame:
     """Forward-fill missing sensor/setting readings per engine unit, then
     back-fill any leading gaps. C-MAPSS rarely has true gaps, but live
     Kafka/InfluxDB ingestion (Module 2/3) can occasionally drop a reading,
@@ -56,28 +61,64 @@ def handle_missing_values(df: pd.DataFrame) -> pd.DataFrame:
     )
     remaining_na = df[FEATURE_COLUMNS].isna().sum().sum()
     if remaining_na:
-        # Entire unit missing a column — fall back to global column median
-        # rather than dropping the unit outright.
-        df[FEATURE_COLUMNS] = df[FEATURE_COLUMNS].fillna(df[FEATURE_COLUMNS].median())
+        medians = fallback_medians or df[FEATURE_COLUMNS].median().to_dict()
+        df[FEATURE_COLUMNS] = df[FEATURE_COLUMNS].fillna(medians)
     return df
 
 
 # ---------------------------------------------------------------------------
 # Sub-module: Outlier Detection & Removal
 # ---------------------------------------------------------------------------
-def clip_outliers(df: pd.DataFrame, z_threshold: float) -> pd.DataFrame:
+def clip_outliers(
+    df: pd.DataFrame,
+    z_threshold: float,
+    stats: dict[str, dict[str, float]] | None = None,
+) -> pd.DataFrame:
     """Clip (not drop) sensor values beyond `z_threshold` standard
     deviations from each sensor's column mean. Clipping is preferred over
     row removal so we never break a unit's time-series continuity, which
     the Sliding Window Generator and LSTM both depend on."""
     df = df.copy()
     for col in SENSOR_COLUMNS:
-        mean, std = df[col].mean(), df[col].std()
+        column_stats = stats.get(col) if stats else None
+        mean = column_stats["mean"] if column_stats else df[col].mean()
+        std = column_stats["std"] if column_stats else df[col].std()
         if std == 0 or np.isnan(std):
             continue  # constant sensor, nothing to clip
         lower, upper = mean - z_threshold * std, mean + z_threshold * std
         df[col] = df[col].clip(lower, upper)
     return df
+
+
+def fit_training_stats(train_df: pd.DataFrame, sub_dataset: str) -> dict[str, dict[str, float]]:
+    """Persist per-feature statistics calculated from training units only."""
+    stats: dict[str, dict[str, float]] = {}
+    for column in FEATURE_COLUMNS:
+        values = train_df[column].dropna()
+        stats[column] = {
+            "mean": float(values.mean()),
+            "std": float(values.std()) or 1e-8,
+            "median": float(values.median()),
+        }
+    stats_path = SCALER_DIR / f"scaler_{sub_dataset}_stats.json"
+    with open(stats_path, "w", encoding="utf-8") as file:
+        json.dump(
+            {
+                "dataset_id": sub_dataset,
+                "outlier_z_threshold": OUTLIER_Z_THRESHOLD,
+                "features": stats,
+            },
+            file,
+            indent=2,
+        )
+    return stats
+
+
+def load_training_stats(sub_dataset: str) -> dict[str, dict[str, float]]:
+    stats_path = SCALER_DIR / f"scaler_{sub_dataset}_stats.json"
+    with open(stats_path, encoding="utf-8") as file:
+        payload = json.load(file)
+    return payload["features"]
 
 
 # ---------------------------------------------------------------------------

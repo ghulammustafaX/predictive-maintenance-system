@@ -73,7 +73,10 @@ def write_to_influxdb(write_api, message):
     """Write Kafka message to InfluxDB."""
     try:
         point = Point("sensor_telemetry") \
-            .tag("unit_id", str(int(message['unit_id']))) \
+            .tag("unit_id", str(int(message['unit_id'])))
+        if message.get('dataset_id'):
+            point = point.tag("dataset_id", str(message['dataset_id']))
+        point = point \
             .field("time_cycles", int(message['time_cycles'])) \
             .field("operational_setting_1", float(message['operational_setting_1'])) \
             .field("operational_setting_2", float(message['operational_setting_2'])) \
