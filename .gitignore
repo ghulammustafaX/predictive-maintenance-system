@@ -285,6 +285,32 @@ backend/*.sqlite
 backend/*.sqlite3
 backend/logs/
 backend/secrets/
+backend/seed_demo_data.py
+
+# Debug and runtime output files
+.dashboard-server.err
+.dashboard-server.out
+backend/.rul-collect.err
+backend/.rul-collect.out
+backend/.rul-pytest.err
+backend/.rul-pytest.out
+
+# Ad-hoc query / check scripts (not part of the application)
+check_data.py
+check_any_data.py
+query_rul.py
+get_rul_stats.py
+list_runs.py
+upload.sh
+
+# Large PDF documents
+*.pdf
+
+# Extra docker-compose variants (rehearsal, testing, migration)
+docker-compose.backup-restore-verification.yml
+docker-compose.ingestion-reliability-test.yml
+docker-compose.kafka-migration-rehearsal*.yml
+docker-compose.module6-test.yml
 
 # Kafka & Streaming data
 **/kafka-data/
@@ -295,14 +321,10 @@ backend/secrets/
 **/volumes/
 **/docker-volumes/
 
-# Test files and databases
-*test*.py
-*test*.db
-*.db
-*.sqlite
-*.sqlite3
+# Test databases only — not test source files
 test_*.db
 *_test.db
+*.test.db
 
 # Temporary files
 *temp*.py
@@ -318,7 +340,7 @@ test_*.db
 *~
 .DS_Store
 
-# Documentation (large files, generated from source, temporary notes)
+# Large binary and generated files in docs
 docs/*.png
 docs/*.jpg
 docs/*.pdf
@@ -339,6 +361,15 @@ TODO.md
 NOTES.md
 DRAFT.md
 
+# Defense / exam preparation documents (internal only)
+docs/DEFENSE_*.md
+docs/CODING_SESSION_LOG.md
+docs/BACKEND_DATABASE_DEFENSE_GUIDE.md
+docs/BACKEND_QUICK_REFERENCE.md
+docs/MODULES_7_8_9_DEFENSE_GUIDE.md
+docs/COMPLETE_SYSTEM_OVERVIEW.md
+docs/module6-compatibility.md
+
 # Working documents (Word, Excel, etc.)
 *.docx
 *.doc
@@ -352,13 +383,13 @@ DRAFT.md
 
 # Keep important documentation (explicitly NOT ignored)
 !README.md
-!SECURITY.md
 !SETUP.md
 !LICENSE.md
 !CHANGELOG.md
 !CONTRIBUTING.md
 !docs/README.md
-!docs/**/*.md
+!docs/ARCHITECTURE.md
+!docs/API.md
 
 # Frontend dependencies and build artifacts
 node_modules/

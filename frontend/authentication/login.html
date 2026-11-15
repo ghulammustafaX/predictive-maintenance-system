@@ -16,6 +16,7 @@
             <p class="subtitle">Sign in to view live telemetry and predictions.</p>
 
             <div class="banner error" id="errorBanner"></div>
+            <div class="banner success" id="successBanner"></div>
 
             <form id="loginForm">
                 <div class="field">
@@ -41,21 +42,52 @@
         </div>
     </div>
 
+    <script>
+        window.PMS_API_BASE = 'http://127.0.0.1:8000';
+    </script>
     <script src="auth-shared.js"></script>
     <script>
         const form          = document.getElementById('loginForm');
         const errorBanner   = document.getElementById('errorBanner');
+        const successBanner = document.getElementById('successBanner');
         const submitButton  = document.getElementById('submitButton');
 
         function showError(message) {
-            errorBanner.textContent = message;
+            successBanner.classList.remove('visible');
+            errorBanner.innerHTML = message;
             errorBanner.classList.add('visible');
+        }
+
+        function showSuccess(message) {
+            errorBanner.classList.remove('visible');
+            successBanner.innerHTML = message;
+            successBanner.classList.add('visible');
+        }
+
+        async function readApiResponse(response) {
+            const text = await response.text();
+            if (!text) return {};
+            try {
+                return JSON.parse(text);
+            } catch {
+                return { detail: text };
+            }
+        }
+
+        function loginErrorMessage(response, data) {
+            if (response.status === 401) return data.detail || 'Incorrect email or password.';
+            if (response.status === 403) return data.detail || 'This account cannot sign in yet.';
+            if (response.status === 422) return data.detail || 'Enter a valid email and password.';
+            if (response.status === 429) return 'Too many sign-in attempts. Please wait and try again.';
+            if (response.status >= 500) return 'The authentication service is temporarily unavailable.';
+            return data.detail || `Sign-in failed (HTTP ${response.status}).`;
         }
 
         /* ── Email / password login ─────────────────────────────────── */
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
             errorBanner.classList.remove('visible');
+            successBanner.classList.remove('visible');
             submitButton.disabled = true;
             submitButton.textContent = 'Signing in…';
 
@@ -68,19 +100,67 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ email, password }),
                 });
-                const data = await response.json();
+                const data = await readApiResponse(response);
 
-                if (!response.ok) { showError(data.detail || 'Could not sign in.'); return; }
+                if (!response.ok) {
+                    // Check if it's an email verification error
+                    if (response.status === 403 && data.detail && data.detail.includes('verify your email')) {
+                        showVerificationError(email);
+                    } else {
+                        showError(loginErrorMessage(response, data));
+                    }
+                    return;
+                }
 
                 Auth.saveTokens(data.access_token, data.refresh_token);
                 window.location.href = DASHBOARD_PATH;
-            } catch {
-                showError('Could not reach the server. Is the backend running?');
+            } catch (error) {
+                if (error?.name === 'AbortError') {
+                    showError('Sign-in timed out. Check the backend connection and try again.');
+                } else {
+                    showError('Could not reach the authentication service. Check the backend connection and try again.');
+                }
             } finally {
                 submitButton.disabled = false;
                 submitButton.textContent = 'Sign in';
             }
         });
+
+        function showVerificationError(email) {
+            errorBanner.innerHTML = `
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <div>Please verify your email address before logging in. Check your inbox for the verification link.</div>
+                    <button
+                        onclick="resendVerificationEmail('${email}')"
+                        style="align-self: flex-start; padding: 8px 14px; background: var(--accent); color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 0.85rem; font-weight: 500; transition: all var(--transition);"
+                        onmouseover="this.style.background='var(--accent-hover)'"
+                        onmouseout="this.style.background='var(--accent)'"
+                    >
+                        Resend verification email
+                    </button>
+                </div>
+            `;
+            errorBanner.classList.add('visible');
+        }
+
+        async function resendVerificationEmail(email) {
+            try {
+                const response = await fetch(`${API_BASE}/api/auth/resend-verification`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email }),
+                });
+                const data = await response.json();
+
+                if (response.ok) {
+                    showSuccess('Verification email sent! Please check your inbox.');
+                } else {
+                    showError(data.detail || 'Could not resend verification email.');
+                }
+            } catch {
+                showError('Could not reach the server. Please try again.');
+            }
+        }
 
         /* ── Google Sign-In ─────────────────────────────────────────── */
         async function handleGoogleCredential(response) {

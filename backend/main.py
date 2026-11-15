@@ -4,16 +4,21 @@ Authentication & RBAC (new)."""
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from influxdb_client import InfluxDBClient
 
 from app.database import Base, engine
 from app.routers.auth import router as auth_router
+from app.routers.fleet import router as fleet_router
+from app.routers.rul import router as rul_router
+from app.routers.anomalies import router as anomalies_router
+from app.routers.alerts import router as alerts_router
 from app.rbac import require_role
 from app.models import User, UserRole
 
@@ -36,6 +41,23 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def request_timing_middleware(request: Request, call_next):
+    started_at = time.perf_counter()
+    response = None
+    try:
+        response = await call_next(request)
+        return response
+    finally:
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        print(
+            f"[HTTP] {request.method} {request.url.path} "
+            f"{response.status_code if response is not None else 500} "
+            f"{elapsed_ms:.1f}ms",
+            flush=True,
+        )
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     # NOTE: create_all is fine for an FYP timeline; a production system
@@ -45,12 +67,16 @@ def on_startup() -> None:
 
 
 app.include_router(auth_router)
+app.include_router(fleet_router)
+app.include_router(rul_router)
+app.include_router(anomalies_router)
+app.include_router(alerts_router)
 
 
 def get_client() -> InfluxDBClient:
     if not INFLUXDB_TOKEN:
         raise HTTPException(status_code=500, detail="INFLUXDB_TOKEN is not set")
-    return InfluxDBClient(url=INFLUXDB_URL, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG)
+    return InfluxDBClient(url=INFLUXDB_URL, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG, timeout=30_000)
 
 
 def to_number(value: Any) -> float | int | None:
@@ -91,12 +117,16 @@ def parse_records(query_api, query: str) -> list[dict[str, Any]]:
 
 
 def latest_records(query_api, limit: int = 8) -> list[dict[str, Any]]:
+    # Use group() + last() so InfluxDB uses its per-series index and returns
+    # the latest point per series without scanning or sorting the full range.
+    # sort + limit over a large range is O(N log N) and caused 10-18s timeouts.
     query = f'''
 from(bucket: "{INFLUXDB_BUCKET}")
-  |> range(start: -24h)
-  |> filter(fn: (r) => r._measurement == "{MEASUREMENT}")
-  |> pivot(rowKey: ["_time", "unit_id"], columnKey: ["_field"], valueColumn: "_value")
-  |> sort(columns: ["_time"], desc: true)
+  |> range(start: -1h)
+  |> filter(fn: (r) => r._measurement == "{MEASUREMENT}" and r._field == "time_cycles")
+  |> keep(columns: ["_time", "_value", "_field", "_measurement", "unit_id"])
+  |> group()
+  |> last()
   |> limit(n: {limit})
 '''
     return parse_records(query_api, query)
@@ -120,19 +150,22 @@ def freshness_seconds(timestamp: str | None) -> float | None:
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
-    client = get_client()
+    # Ping InfluxDB's own /health endpoint — no Flux query, sub-millisecond.
+    # This keeps the health check fast regardless of data volume.
+    import urllib.request
+    influx_ok = False
     try:
-        query_api = client.query_api()
-        rows = latest_records(query_api, limit=1)
-        return {
-            "status": "ok",
-            "influxdb_url": INFLUXDB_URL,
-            "bucket": INFLUXDB_BUCKET,
-            "measurement": MEASUREMENT,
-            "latest_points": len(rows),
-        }
-    finally:
-        client.close()
+        with urllib.request.urlopen(f"{INFLUXDB_URL}/health", timeout=5) as resp:
+            influx_ok = resp.status == 200
+    except Exception:
+        influx_ok = False
+    return {
+        "status": "ok" if influx_ok else "degraded",
+        "influxdb_url": INFLUXDB_URL,
+        "bucket": INFLUXDB_BUCKET,
+        "measurement": MEASUREMENT,
+        "latest_points": -1,  # not queried in health check; use /api/fleet/status for data presence
+    }
 
 
 @app.get("/api/dashboard/live")

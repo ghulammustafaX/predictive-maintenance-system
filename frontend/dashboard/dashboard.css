@@ -2116,6 +2116,119 @@ th {
     animation: card-entrance 450ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+/* Selected-engine control — intentionally follows the existing light card and burgundy accent system. */
+.fleet-context {
+    display: grid;
+    grid-template-columns: minmax(145px, auto) minmax(190px, 320px) minmax(120px, auto) minmax(220px, 1fr);
+    align-items: center;
+    gap: 14px;
+    padding: 14px 18px;
+    margin-bottom: 18px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+}
+
+.fleet-context-label,
+.fleet-context label {
+    display: block;
+}
+
+.fleet-context-label {
+    color: var(--muted);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.fleet-context label {
+    margin-top: 2px;
+    color: var(--text);
+    font-weight: 700;
+    font-size: 0.9rem;
+}
+
+#engineSelect,
+#runSelect {
+    min-width: 0;
+    padding: 9px 34px 9px 11px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-strong);
+    color: var(--text);
+    font: inherit;
+    font-weight: 600;
+}
+
+#engineSelect:focus-visible,
+#runSelect:focus-visible {
+    outline: 3px solid rgba(139, 32, 32, 0.2);
+    outline-offset: 2px;
+    border-color: var(--accent);
+}
+
+.fleet-selection-status {
+    width: fit-content;
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: var(--status-warn-bg);
+    color: var(--status-warn);
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: capitalize;
+}
+
+.fleet-selection-status.healthy { background: var(--status-ok-bg); color: var(--status-ok); }
+.fleet-selection-status.warning,
+.fleet-selection-status.offline { background: var(--status-warn-bg); color: var(--status-warn); }
+.fleet-selection-status.critical { background: var(--status-danger-bg); color: var(--status-danger); }
+.fleet-selection-status.error { background: var(--status-danger-bg); color: var(--status-danger); text-transform: none; }
+
+.fleet-selection-hint {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.78rem;
+    line-height: 1.35;
+}
+
+.rul-reading {
+    margin: 18px 0 6px;
+    color: var(--accent);
+    font-size: clamp(2rem, 4vw, 2.8rem);
+    font-weight: 700;
+    letter-spacing: -0.05em;
+    line-height: 1;
+}
+
+.rul-reading span {
+    color: var(--muted);
+    font-size: 0.9rem;
+    font-weight: 600;
+    letter-spacing: 0;
+}
+
+.rul-detail {
+    min-height: 2.6em;
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.82rem;
+    line-height: 1.45;
+}
+
+.rul-metadata {
+    display: grid;
+    gap: 10px;
+    margin: 18px 0 0;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+}
+
+.rul-metadata div { display: grid; gap: 3px; }
+.rul-metadata dt { color: var(--muted); font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
+.rul-metadata dd { margin: 0; color: var(--text); font-size: 0.82rem; overflow-wrap: anywhere; }
+
 .metrics-grid .metric-card:nth-child(1) { animation-delay: 50ms; }
 .metrics-grid .metric-card:nth-child(2) { animation-delay: 100ms; }
 .metrics-grid .metric-card:nth-child(3) { animation-delay: 150ms; }
@@ -2128,12 +2241,23 @@ th {
     .metrics-grid {
         grid-template-columns: repeat(2, 1fr) !important;
     }
+
+    .fleet-context {
+        grid-template-columns: minmax(145px, 1fr) minmax(190px, 1.3fr);
+    }
 }
 
 @media (max-width: 768px) {
     .metrics-grid {
         grid-template-columns: 1fr !important;
     }
+
+    .fleet-context {
+        grid-template-columns: 1fr;
+        align-items: stretch;
+    }
+
+    .fleet-selection-status { width: fit-content; }
 }
 
 @media (max-width: 480px) {

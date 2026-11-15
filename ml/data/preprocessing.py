@@ -48,20 +48,23 @@ FEATURE_COLUMNS = SETTING_COLUMNS + SENSOR_COLUMNS
 def handle_missing_values(
     df: pd.DataFrame,
     fallback_medians: dict[str, float] | None = None,
+    backfill: bool = True,
 ) -> pd.DataFrame:
     """Forward-fill missing sensor/setting readings per engine unit, then
-    back-fill any leading gaps. C-MAPSS rarely has true gaps, but live
-    Kafka/InfluxDB ingestion (Module 2/3) can occasionally drop a reading,
-    so this must also work on streamed data, not just the static files."""
+    back-fill any leading gaps by default. Streaming callers set
+    ``backfill=False`` so leading gaps use persisted training medians."""
     df = df.sort_values(["unit_id", "time_cycles"]).copy()
-    df[FEATURE_COLUMNS] = (
-        df.groupby("unit_id")[FEATURE_COLUMNS]
-        .apply(lambda g: g.ffill().bfill())
-        .reset_index(drop=True)
-    )
+    filled = df.groupby("unit_id")[FEATURE_COLUMNS].ffill()
+    if backfill:
+        filled = filled.groupby(df["unit_id"].to_numpy()).bfill()
+    df[FEATURE_COLUMNS] = filled
     remaining_na = df[FEATURE_COLUMNS].isna().sum().sum()
     if remaining_na:
-        medians = fallback_medians or df[FEATURE_COLUMNS].median().to_dict()
+        medians = (
+            fallback_medians
+            if fallback_medians is not None
+            else df[FEATURE_COLUMNS].median().to_dict()
+        )
         df[FEATURE_COLUMNS] = df[FEATURE_COLUMNS].fillna(medians)
     return df
 
@@ -114,8 +117,12 @@ def fit_training_stats(train_df: pd.DataFrame, sub_dataset: str) -> dict[str, di
     return stats
 
 
-def load_training_stats(sub_dataset: str) -> dict[str, dict[str, float]]:
-    stats_path = SCALER_DIR / f"scaler_{sub_dataset}_stats.json"
+def load_training_stats(
+    sub_dataset: str,
+    artifact_dir: str | None = None,
+) -> dict[str, dict[str, float]]:
+    stats_root = SCALER_DIR if artifact_dir is None else artifact_dir
+    stats_path = stats_root / f"scaler_{sub_dataset}_stats.json"
     with open(stats_path, encoding="utf-8") as file:
         payload = json.load(file)
     return payload["features"]
@@ -136,8 +143,12 @@ def fit_scaler(train_df: pd.DataFrame, sub_dataset: str) -> MinMaxScaler:
     return scaler
 
 
-def load_scaler(sub_dataset: str) -> MinMaxScaler:
-    scaler_path = SCALER_DIR / f"scaler_{sub_dataset}.pkl"
+def load_scaler(
+    sub_dataset: str,
+    artifact_dir: str | None = None,
+) -> MinMaxScaler:
+    scaler_root = SCALER_DIR if artifact_dir is None else artifact_dir
+    scaler_path = scaler_root / f"scaler_{sub_dataset}.pkl"
     with open(scaler_path, "rb") as f:
         return pickle.load(f)
 

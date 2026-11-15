@@ -19,7 +19,10 @@ REPO_ROOT = ML_ROOT.parent
 
 RAW_DATA_DIR = REPO_ROOT / "simulator" / "data" / "cmapss"
 PROCESSED_DIR = ML_ROOT / "saved" / "processed"
+# Current persisted preprocessing artifact set. The preserved pre-leakage
+# baseline is kept separately under saved_v1_pre_leakage_fix.
 SCALER_DIR = ML_ROOT / "saved" / "scalers"
+STREAMING_ARTIFACT_DIR = ML_ROOT / "saved_v2_a1" / "scalers"
 CHECKPOINT_DIR = ML_ROOT / "saved" / "checkpoints"
 FEATURE_STORE_DIR = ML_ROOT / "saved" / "features"
 

@@ -12,7 +12,7 @@
   // No manual switching needed - handled by media attribute in HTML
 })();
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = window.PMS_API_BASE || 'http://127.0.0.1:8000';
 
 // These two pages live in DIFFERENT folders (frontend/authentication/
 // vs frontend/dashboard/), so the relative path between them depends on
@@ -28,6 +28,8 @@ const CHANGE_PASSWORD_PATH = window.PMS_CHANGE_PASSWORD_PATH || 'change-password
 const PROFILE_PATH = window.PMS_PROFILE_PATH || 'profile.html';
 
 const Auth = {
+  refreshPromise: null,
+
   saveTokens(accessToken, refreshToken) {
     localStorage.setItem('pms_access_token', accessToken);
     localStorage.setItem('pms_refresh_token', refreshToken);
@@ -94,6 +96,9 @@ const Auth = {
   },
 
   async tryRefresh() {
+    if (this.refreshPromise) return this.refreshPromise;
+
+    this.refreshPromise = (async () => {
     try {
       const response = await fetch(`${API_BASE}/api/auth/refresh`, {
         method: 'POST',
@@ -106,6 +111,13 @@ const Auth = {
       return true;
     } catch {
       return false;
+    }
+    })();
+
+    try {
+      return await this.refreshPromise;
+    } finally {
+      this.refreshPromise = null;
     }
   },
 
