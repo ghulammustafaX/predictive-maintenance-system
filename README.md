@@ -10,6 +10,10 @@ Industrial equipment degrades over time. This system monitors 100 simulated turb
 
 The pipeline runs entirely in Docker and processes data end-to-end: a simulator replays real NASA sensor recordings into Kafka, a consumer writes them to InfluxDB, a preprocessing service normalises the stream, and an LSTM prediction service publishes RUL estimates back to Kafka and InfluxDB. The dashboard reads from InfluxDB and PostgreSQL in real time.
 
+> 📽️ **Demo video** — watch the full system running live:
+>
+> [![PMS Demo Video](https://img.youtube.com/vi/4_dOkwqwShI/maxresdefault.jpg)](https://youtu.be/4_dOkwqwShI)
+
 ---
 
 ## System architecture
