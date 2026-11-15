@@ -6,6 +6,8 @@ Reads train_FD001.txt and streams sensor data to Kafka topic: sensor-telemetry
 import os
 import time
 import json
+import uuid
+from datetime import datetime, timezone
 import pandas as pd
 import numpy as np
 from kafka import KafkaProducer
@@ -18,9 +20,10 @@ load_dotenv()
 # Configuration
 KAFKA_BROKER = os.getenv('KAFKA_BROKER', 'kafka:9092')
 SENSOR_TOPIC = os.getenv('SENSOR_TOPIC', 'sensor-telemetry')
-DATA_PATH = '/app/data/cmapss/train_FD001.txt'
-# DATA_PATH = 'data/cmapss/train_FD001.txt'
-STREAM_INTERVAL = 1.0  # seconds between each row
+DATASET_ID = os.getenv('DATASET_ID', 'FD001').upper()
+DATA_PATH = f'/app/data/cmapss/train_{DATASET_ID}.txt'
+STREAM_INTERVAL = float(os.getenv('STREAM_INTERVAL', '1.0'))
+RUN_ID = os.getenv('RUN_ID') or uuid.uuid4().hex
 
 # Column names for C-MAPSS dataset
 COLUMNS = [
@@ -82,7 +85,12 @@ def stream_data_to_kafka(df, producer):
             payload = row.to_dict()
             
             # Replace NaN with None for JSON serialization
-            payload = {k: (None if pd.isna(v) else float(v)) for k, v in payload.items()}
+            payload = {
+                'dataset_id': DATASET_ID,
+                'run_id': RUN_ID,
+                'timestamp': datetime.now(timezone.utc).isoformat(),
+                **{k: (None if pd.isna(v) else float(v)) for k, v in payload.items()},
+            }
             
             # Send to Kafka
             future = producer.send(SENSOR_TOPIC, value=payload)

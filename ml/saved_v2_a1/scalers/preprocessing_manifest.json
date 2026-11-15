@@ -1,0 +1,82 @@
+{
+  "artifact_version": "a1-v2",
+  "purpose": "streaming preprocessing only; generated from training units",
+  "datasets": [
+    "FD001",
+    "FD002",
+    "FD003",
+    "FD004"
+  ],
+  "feature_order": [
+    "operational_setting_1",
+    "operational_setting_2",
+    "operational_setting_3",
+    "sensor_1",
+    "sensor_2",
+    "sensor_3",
+    "sensor_4",
+    "sensor_5",
+    "sensor_6",
+    "sensor_7",
+    "sensor_8",
+    "sensor_9",
+    "sensor_10",
+    "sensor_11",
+    "sensor_12",
+    "sensor_13",
+    "sensor_14",
+    "sensor_15",
+    "sensor_16",
+    "sensor_17",
+    "sensor_18",
+    "sensor_19",
+    "sensor_20",
+    "sensor_21"
+  ],
+  "schema_version": "raw-24-v1",
+  "missing_value_policy": "per-engine forward-fill, then training median",
+  "outlier_policy": "training-unit mean/std clipping at 5 standard deviations",
+  "scaler_policy": "per-dataset MinMaxScaler fit on training units",
+  "window_size": 30,
+  "checkpoint_sha256": "d1d0d1a329ecb9b2efffcdb7503cba076df4f68ac0d644a4f56a30d4f88948d0",
+  "artifact_sha256": {
+    "FD001": {
+      "scaler": "a93053fe543623d25061dc6ba6718c8a9f6aa5555db77bf92dfb6cadd8b5fddc",
+      "statistics": "02b96a1e2cc1271e40b043c603bc8af54507afbd153217526a09c813d4ce4e81"
+    },
+    "FD002": {
+      "scaler": "a4c04f06e7f2938fc755d6c2464ab12a32e699c7fa9d5808911eeb8ec6c81cf7",
+      "statistics": "b1f9570cdefd17392f1524e843b52e725996acdecba0650daa3a07786aabb70f"
+    },
+    "FD003": {
+      "scaler": "102c5ed51ef093bc3e4f082e752a89f5bf70a757727b202a2439ad547c8ddd84",
+      "statistics": "e55cd59fd7a1e6a5c8349d50fc0ad35e7b855cb5646ceda2c339eecf2b915768"
+    },
+    "FD004": {
+      "scaler": "d0a8534f765b9c79746196ee576ecee611f6c71f48deec5649a3f9185fe8586f",
+      "statistics": "be72a7fc8463f929c84957398954140035baeb5a1494ecf26bafd8daf0f9d528"
+    }
+  },
+  "validation": {
+    "status": "accuracy_and_normal_input_parity_validated",
+    "evaluation_protocol": "Existing held-out raw test.npz files; final 30-cycle window per test engine",
+    "normal_input_max_abs_difference": 2.98e-08,
+    "final_window_max_abs_difference": 0.0,
+    "all_input_equivalence": false,
+    "leading_missing_behavior": "Streaming uses prior value or training median; offline may backfill from future rows",
+    "test_sample_counts": {
+      "FD001": 100,
+      "FD002": 259,
+      "FD003": 100,
+      "FD004": 248
+    },
+    "metrics": {
+      "FD001": {"rmse": 13.789149, "mae": 10.083426},
+      "FD002": {"rmse": 16.069065, "mae": 12.343381},
+      "FD003": {"rmse": 13.654165, "mae": 9.921313},
+      "FD004": {"rmse": 18.824083, "mae": 14.048673}
+    }
+  },
+  "raw_checkpoint_accuracy_compatible": true,
+  "compatibility_note": "Validated for normal complete telemetry and causal streaming semantics. This does not claim all-input equivalence."
+}

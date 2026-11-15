@@ -10,7 +10,14 @@ Auth.requireAuth();
 async function renderSidebarProfile() {
     const el = document.getElementById('pms-account-strip');
     if (!el) return;
-    const user = await Auth.fetchMe();
+    if (!Auth.isLoggedIn()) return;
+    let user;
+    try {
+        user = await Auth.fetchMe();
+    } catch (error) {
+        console.warn('[Dashboard] Account profile unavailable:', error.message);
+        return;
+    }
     if (!user) return;
 
     const initials = user.full_name
@@ -92,11 +99,20 @@ async function renderSidebarProfile() {
     logoutBtn.addEventListener('click', () => {
         Auth.logout();
     });
+
+    // Reveal the Users nav link for admins only
+    if (user.role === 'admin') {
+        const navUsers = document.getElementById('navUsers');
+        if (navUsers) navUsers.style.display = '';
+    }
 }
 
 renderSidebarProfile();
 
-const POLL_MS = 2000; // Refreshed to 2 seconds for a faster "live" experience
+const POLL_MS = 5000;
+const REQUEST_TIMEOUT_MS = 8000;
+const LIVE_MAX_AGE_SECONDS = 60;
+const STALE_MAX_AGE_SECONDS = 24 * 60 * 60;
 
 const state = {
     limit: 8,
@@ -104,7 +120,20 @@ const state = {
     lastRecordCount: null,
     refreshCooldownActive: false,
     lastSuccessTime: null,
-    tableState: null
+    tableState: null,
+    fleet: [],
+    selectedEngine: null,
+    loading: false,
+    hasRenderedData: false,
+    activeRequestController: null,
+    pollTimer: null,
+    refreshTimer: null,
+    pageExiting: false,
+    selectionVersion: 0,
+    pendingReload: false,
+    latestTelemetryRun: null,
+    selectedRunId: null,
+    systemHealth: 'unknown'
 };
 
 const elements = {
@@ -130,7 +159,15 @@ const elements = {
     liveNoteDot: document.getElementById('liveNoteDot'),
     chartNoDataMessage: document.getElementById('chartNoDataMessage'),
     pipelineTrack: document.getElementById('pipelineTrack'),
-    ingestionChartCanvas: document.getElementById('ingestionChart')
+    ingestionChartCanvas: document.getElementById('ingestionChart'),
+    engineSelect: document.getElementById('engineSelect'),
+    runSelect: document.getElementById('runSelect'),
+    fleetSelectionStatus: document.getElementById('fleetSelectionStatus'),
+    rulCycles: document.getElementById('rulCycles'),
+    rulStatus: document.getElementById('rulStatus'),
+    rulDetail: document.getElementById('rulDetail'),
+    rulTimestamp: document.getElementById('rulTimestamp'),
+    rulModelPairing: document.getElementById('rulModelPairing')
 };
 
 // Log missing elements for debugging
@@ -182,6 +219,30 @@ function formatTimestamp(value) {
     return Number.isNaN(date.getTime()) ? '--' : df.format(date);
 }
 
+function sourceTimeMillis(value) {
+    if (!value) return null;
+    const milliseconds = new Date(value).getTime();
+    return Number.isFinite(milliseconds) ? milliseconds : null;
+}
+
+function sourceAgeSeconds(value) {
+    const milliseconds = sourceTimeMillis(value);
+    if (milliseconds === null) return null;
+    const offsetSeconds = (Date.now() - milliseconds) / 1000;
+    // Return null for future timestamps to avoid showing misleading "1s ago"
+    return offsetSeconds < 0 ? null : offsetSeconds;
+}
+
+function sourceOffsetSeconds(value) {
+    const milliseconds = sourceTimeMillis(value);
+    return milliseconds === null ? null : (Date.now() - milliseconds) / 1000;
+}
+
+function isFutureTimestamp(value) {
+    const offsetSeconds = sourceOffsetSeconds(value);
+    return offsetSeconds !== null && offsetSeconds < 0;
+}
+
 function formatAge(seconds) {
     if (!Number.isFinite(seconds)) {
         return '--';
@@ -199,8 +260,13 @@ function sensorPercent(value, min = 0, max = 9000) {
 }
 
 // Render dynamic elements
-function renderTable(rows, isOnline = true) {
+function renderTable(rows, isOnline = true, emptyMessage = '') {
     if (!rows.length) {
+        if (emptyMessage) {
+            state.tableState = 'empty';
+            elements.dataTable.innerHTML = `<tr><td colspan="6" class="soft" style="text-align:center; padding: 28px;">${emptyMessage}</td></tr>`;
+            return;
+        }
         if (!isOnline) {
             if (state.tableState === 'offline') return;
             state.tableState = 'offline';
@@ -246,8 +312,8 @@ function renderTable(rows, isOnline = true) {
     elements.dataTable.innerHTML = rows.map((row) => `
         <tr>
             <td>${formatTimestamp(row.timestamp)}</td>
-            <td>${valueOrDash(row.unit_id, 0)}</td>
-            <td>${valueOrDash(row.time_cycles, 0)}</td>
+            <td>${state.selectedEngine || '--'}</td>
+            <td>${valueOrDash(row.cycle, 0)}</td>
             <td>${valueOrDash(row.sensor_1)}</td>
             <td>${valueOrDash(row.sensor_2)}</td>
             <td>${valueOrDash(row.sensor_14)}</td>
@@ -269,10 +335,20 @@ function renderSensors(row) {
         const reading = box.querySelector('.reading');
         const bar = box.querySelector('.bar span');
         const label = key === 'time_cycles' ? 'Cycle' : key.replace('sensor_', 'Sensor ');
-        const value = key === 'time_cycles' ? row.time_cycles : row[key];
+        const value = key === 'time_cycles' ? row.cycle : row[key];
         reading.textContent = valueOrDash(value, 2);
         bar.style.width = `${key === 'time_cycles' ? sensorPercent(value, 0, 300) : sensorPercent(value)}%`;
         box.querySelector('.name').textContent = label;
+    });
+}
+
+function renderEmptySensors() {
+    const cards = elements.sensorMatrix.querySelectorAll('.sensor-box');
+    cards.forEach((box) => {
+        const reading = box.querySelector('.reading');
+        const bar = box.querySelector('.bar span');
+        reading.textContent = '--';
+        bar.style.width = '0%';
     });
 }
 
@@ -311,7 +387,7 @@ function initIngestionChart() {
         data: {
             labels: chartLabels,
             datasets: [{
-                label: 'InfluxDB Ingests',
+                label: 'Loaded telemetry points',
                 data: chartData,
                 borderColor: colors.line,
                 backgroundColor: colors.fill,
@@ -340,7 +416,7 @@ function initIngestionChart() {
                     cornerRadius: 8,
                     callbacks: {
                         title: (items) => items[0]?.label || '',
-                        label: (item) => `  ${item.formattedValue} records`
+                        label: (item) => `  ${item.formattedValue} loaded points`
                     }
                 }
             },
@@ -359,7 +435,7 @@ function initIngestionChart() {
     });
 }
 
-function updateIngestionChart(recordCount, isOnline) {
+function updateIngestionChart(loadedPointCount, isOnline) {
     if (!ingestionChart) initIngestionChart();
     if (!ingestionChart) return;
 
@@ -371,7 +447,7 @@ function updateIngestionChart(recordCount, isOnline) {
     }
 
     chartLabels.push(now);
-    chartData.push(recordCount ?? 0);
+    chartData.push(loadedPointCount ?? 0);
 
     // Keep rolling 30-point window
     if (chartLabels.length > CHART_MAX_POINTS) {
@@ -415,52 +491,56 @@ function animateSparkline(isOnline) {
     // Legacy stub — real chart handled by updateIngestionChart
 }
 
-function setOnlineState(isOnline, message) {
-    elements.apiStatus.textContent = isOnline ? 'Live' : 'Offline';
-    elements.apiStatus.style.color = isOnline ? 'var(--status-ok)' : 'var(--status-warn)';
+function setOnlineState(status, message) {
+    const normalizedStatus = status === true ? 'live' : status === false ? 'offline' : status;
+    const isLive = normalizedStatus === 'live';
+    const isStale = normalizedStatus === 'stale';
+    const isFuture = normalizedStatus === 'future';
+    const isOffline = normalizedStatus === 'offline';
+    const label = normalizedStatus.charAt(0).toUpperCase() + normalizedStatus.slice(1);
 
     // Dynamic styling for streamBadge status-chip
-    elements.streamBadge.className = isOnline ? 'status-chip' : 'status-chip warning';
-    elements.streamBadge.textContent = isOnline ? 'Streaming' : 'Disconnected';
+    elements.streamBadge.className = isLive ? 'status-chip' : 'status-chip warning';
+    elements.streamBadge.textContent = isLive ? 'Live' : isStale ? 'Stale' : isFuture ? 'Future' : 'Offline';
 
     // Dynamic styling for tableStatus status-chip
-    elements.tableStatus.className = isOnline ? 'status-chip' : 'status-chip warning';
-    elements.tableStatus.innerHTML = isOnline
+    elements.tableStatus.className = isLive ? 'status-chip' : 'status-chip warning';
+    elements.tableStatus.innerHTML = isLive
         ? '<span class="pulse" id="tableStatusPulse"></span> Live'
-        : '<span class="pulse warning" id="tableStatusPulse"></span> Offline';
+        : `<span class="pulse warning" id="tableStatusPulse"></span> ${label}`;
 
-    // Show last successful connection time when status is OFFLINE
-    if (isOnline) {
+    // Keep the last known telemetry visible when the API is stale or unreachable.
+    if (isLive || isStale || isFuture) {
         elements.statusNote.textContent = message;
     } else {
         if (state.lastSuccessTime) {
-            elements.statusNote.innerHTML = `Backend API could not be reached.<br><small style="color: var(--muted); font-size: 0.8rem; margin-top: 4px; display: block;">Last sync: ${df.format(state.lastSuccessTime)}</small>`;
+            elements.statusNote.innerHTML = `${message}<br><small style="color: var(--muted); font-size: 0.8rem; margin-top: 4px; display: block;">Last successful sync: ${df.format(state.lastSuccessTime)}</small>`;
         } else {
-            elements.statusNote.textContent = 'Backend API could not be reached.';
+            elements.statusNote.textContent = message;
         }
     }
 
     if (elements.liveNoteDot) {
-        elements.liveNoteDot.className = isOnline ? 'note-indicator-dot status online' : 'note-indicator-dot status';
+        elements.liveNoteDot.className = isLive ? 'note-indicator-dot status online' : 'note-indicator-dot status';
     }
 
     // Toggle active class on pipelineTrack (triggers shimmer animation)
     if (elements.pipelineTrack) {
-        elements.pipelineTrack.classList.toggle('active', isOnline);
+        elements.pipelineTrack.classList.toggle('active', isLive);
     }
 
     // Toggle zero-data watermark message in chart
     if (elements.chartNoDataMessage) {
-        elements.chartNoDataMessage.style.display = isOnline ? 'none' : 'flex';
+        elements.chartNoDataMessage.style.display = state.hasRenderedData ? 'none' : 'flex';
     }
     if (elements.ingestionChartCanvas) {
-        elements.ingestionChartCanvas.style.opacity = isOnline ? '1' : '0.35';
+        elements.ingestionChartCanvas.style.opacity = state.hasRenderedData ? '1' : '0.35';
     }
 
     // Toggle warning class on all pulse indicator dots on the page when offline
     const pulses = document.querySelectorAll('.pulse');
     pulses.forEach(pulse => {
-        if (isOnline) {
+        if (isLive) {
             pulse.classList.remove('warning');
             pulse.classList.remove('offline');
         } else {
@@ -468,10 +548,11 @@ function setOnlineState(isOnline, message) {
         }
     });
 
-    animateSparkline(isOnline);
+    animateSparkline(isLive);
 
-    // If offline, populate fields with skeleton loading indicators to make it feel polished
-    if (!isOnline) {
+    // Only show skeletons before the first successful data render. Do not erase
+    // last-known values during a transient timeout or a stale-data response.
+    if (isOffline && !state.hasRenderedData) {
         elements.streamCount.innerHTML = '<div class="skeleton-text" style="width: 50%; height: 1.15rem; margin: 4px 0;"></div>';
         elements.unitCount.innerHTML = '<div class="skeleton-text" style="width: 40%; height: 1.15rem; margin: 4px 0;"></div>';
         elements.latestCycle.innerHTML = '<div class="skeleton-text" style="width: 45%; height: 1.15rem; margin: 4px 0;"></div>';
@@ -488,7 +569,7 @@ function setOnlineState(isOnline, message) {
         elements.snapshotLabel.textContent = 'Waiting for data';
 
         // Clear table and show skeleton or offline illustration
-        renderTable([], isOnline);
+        renderTable([], false);
 
         // Clear sensor boxes and show skeletons
         const cards = elements.sensorMatrix.querySelectorAll('.sensor-box');
@@ -501,103 +582,336 @@ function setOnlineState(isOnline, message) {
     }
 }
 
-function updateDashboard(payload) {
-    try {
-        const rows = Array.isArray(payload.latest_records) ? payload.latest_records : [];
-        state.values = rows;
-
-        const metrics = payload.metrics || {};
-        const latest = rows[0] || null;
-
-        // We got data, so mark it online
-        state.lastSuccessTime = new Date();
-        setOnlineState(true, 'System operating normally.');
-
-        elements.streamCount.textContent = metrics.record_count ? nf.format(metrics.record_count) : '--';
-        elements.unitCount.textContent = metrics.unique_units ? nf.format(metrics.unique_units) : '--';
-        elements.latestCycle.textContent = latest ? nf.format(safeInt(latest.time_cycles) ?? 0) : '--';
-        elements.freshnessMetric.textContent = payload.latest_age_seconds !== null && payload.latest_age_seconds !== undefined
-            ? formatAge(payload.latest_age_seconds)
-            : '--';
-
-        elements.snapshotLabel.textContent = latest
-            ? `Unit ${valueOrDash(latest.unit_id, 0)} • Cycle ${valueOrDash(latest.time_cycles, 0)}`
-            : 'Waiting for data';
-
-        elements.lastUpdate.textContent = payload.latest_timestamp ? formatTimestamp(payload.latest_timestamp) : '--';
-        elements.freshnessText.textContent = payload.latest_age_seconds !== null && payload.latest_age_seconds !== undefined
-            ? formatAge(payload.latest_age_seconds)
-            : '--';
-        elements.unitText.textContent = latest
-            ? `Unit ${valueOrDash(latest.unit_id, 0)}`
-            : '--';
-        elements.windowLabel.textContent = payload.window_label || 'Last 24 hours';
-
-        elements.freshnessBar.style.width = `${Math.max(12, Math.min(100, 100 - Math.min(100, payload.latest_age_seconds || 0)))}%`;
-        elements.unitBar.style.width = `${metrics.unit_bar_percent || 0}%`;
-
-        // Dynamic ingestion rate calculation
-        if (elements.ingestionRate) {
-            if (state.lastRecordCount && metrics.record_count) {
-                const diff = metrics.record_count - state.lastRecordCount;
-                const rate = Math.max(0, diff / (POLL_MS / 1000));
-                elements.ingestionRate.textContent = rate > 0 ? `${rate.toFixed(1)} rec/s` : '1.0 rec/s';
-            } else {
-                elements.ingestionRate.textContent = '1.0 rec/s';
-            }
-        }
-        state.lastRecordCount = metrics.record_count || null;
-
-        renderTable(rows);
-        renderSensors(latest);
-
-        // Feed the real-time Chart.js ingestion chart
-        updateIngestionChart(metrics.record_count ?? null, true);
-
-        setOnlineState(true, `Fetched ${rows.length} live rows from InfluxDB.`);
-
-        if (latest) {
-            const values = trackedSensors.map((key) => latest[key]).filter((value) => Number.isFinite(Number(value)));
-            const avg = values.length
-                ? values.reduce((sum, value) => sum + Number(value), 0) / values.length
-                : 0;
-            elements.statusNote.textContent = `Last point from unit ${valueOrDash(latest.unit_id, 0)} at cycle ${valueOrDash(latest.time_cycles, 0)}. Sensor average ${avg.toFixed(2)}.`;
-        }
-
-        elements.errorBox.style.display = 'none';
-    } catch (error) {
-        console.error('[Dashboard] updateDashboard error:', error);
-        // Find which element is null
-        for (const [key, value] of Object.entries(elements)) {
-            if (value === null) {
-                console.error(`[Dashboard] Missing element: ${key}`);
-            }
-        }
-        throw error; // Re-throw so it's handled by loadDashboard's catch
+function setSystemHealth(status, message) {
+    state.systemHealth = status;
+    const healthy = status === 'healthy';
+    const unavailable = status === 'unavailable';
+    elements.apiStatus.textContent = healthy
+        ? 'System healthy'
+        : unavailable
+            ? 'System unavailable'
+            : 'System degraded';
+    elements.apiStatus.style.color = healthy ? 'var(--status-ok)' : 'var(--status-warn)';
+    if (message) {
+        elements.apiStatus.title = message;
     }
+}
+
+function setFleetSelectionStatus(message, kind = '') {
+    elements.fleetSelectionStatus.textContent = message;
+    elements.fleetSelectionStatus.className = `fleet-selection-status ${kind}`.trim();
+}
+
+function setRulStatus(message, kind = 'warning') {
+    elements.rulStatus.textContent = message;
+    elements.rulStatus.className = kind === 'live' ? 'status-chip' : 'status-chip warning';
+}
+
+function clearRul(detail = 'Loading the latest stored prediction…') {
+    state.latestTelemetryRun = null;
+    elements.rulCycles.innerHTML = '-- <span>cycles</span>';
+    elements.rulDetail.textContent = detail;
+    elements.rulTimestamp.textContent = '--';
+    elements.rulModelPairing.textContent = 'Experimental pairing unavailable';
+    setRulStatus(detail.startsWith('Loading') ? 'Loading' : 'Awaiting data');
+}
+
+function selectEngine(engineId) {
+    if (engineId === state.selectedEngine) return;
+    state.selectedEngine = engineId;
+    state.selectedRunId = null;
+    state.selectionVersion += 1;
+    clearRul();
+}
+
+function renderRunOptions(points) {
+    if (!elements.runSelect) return;
+    const runs = [...new Set(points.map((point) => point.run_id).filter(Boolean))];
+    console.log(`[RunSelector] Found ${runs.length} unique runs from ${points.length} points:`, runs);
+    if (state.selectedRunId && !runs.includes(state.selectedRunId)) {
+        state.selectedRunId = null;
+    }
+    if (!state.selectedRunId) {
+        state.selectedRunId = runs[0] || null;
+    }
+    elements.runSelect.replaceChildren();
+    if (!runs.length) {
+        console.log('[RunSelector] No runs available, setting disabled state');
+        elements.runSelect.add(new Option('No runs in range', ''));
+        elements.runSelect.disabled = true;
+        return;
+    }
+    console.log(`[RunSelector] Populating dropdown with ${runs.length} runs, selected: ${state.selectedRunId}`);
+    runs.forEach((runId) => {
+        const option = new Option(runId, runId);
+        option.selected = runId === state.selectedRunId;
+        elements.runSelect.add(option);
+    });
+    elements.runSelect.disabled = false;
+    console.log('[RunSelector] Dropdown populated and enabled');
+}
+
+function setRunSelectorState(label, disabled = true) {
+    if (!elements.runSelect) return;
+    elements.runSelect.replaceChildren(new Option(label, ''));
+    elements.runSelect.disabled = disabled;
+}
+
+function renderRul(payload) {
+    const prediction = payload?.prediction || payload?.points?.slice(-1)[0];
+    if (!prediction) {
+        clearRul('No stored RUL prediction is available for this engine.');
+        setRulStatus('No prediction');
+        return;
+    }
+
+    const ageSeconds = sourceAgeSeconds(prediction.timestamp);
+    const future = isFutureTimestamp(prediction.timestamp);
+    const isStale = ageSeconds === null || ageSeconds > STALE_MAX_AGE_SECONDS;
+    const runMismatch = Boolean(state.selectedRunId && prediction.run_id !== state.selectedRunId);
+    elements.rulCycles.innerHTML = `${valueOrDash(prediction.rul_cycles)} <span>cycles</span>`;
+    elements.rulTimestamp.textContent = formatTimestamp(prediction.timestamp);
+    elements.rulModelPairing.textContent = `${prediction.model_version} / ${prediction.preprocessing_artifact_version} · experimental`;
+    elements.rulDetail.textContent = future
+        ? `Future timestamp detected (${formatTimestamp(prediction.timestamp)}). Verify source clock; run ${prediction.run_id}.`
+        : runMismatch
+        ? `Run mismatch: telemetry ${state.latestTelemetryRun}; RUL ${prediction.run_id}.`
+        : isStale
+            ? `Prediction is stale${ageSeconds === null ? '' : ` (${formatAge(ageSeconds)})`}. Latest run: ${prediction.run_id}.`
+            : `Prediction for cycle ${valueOrDash(prediction.cycle, 0)} · ${formatAge(ageSeconds)} · run ${prediction.run_id}.`;
+    setRulStatus(future ? 'Future timestamp' : runMismatch ? 'Run mismatch' : isStale ? 'Stale prediction' : 'Experimental', future || runMismatch || isStale ? 'warning' : 'live');
+}
+
+function showRulError(message) {
+    elements.rulCycles.innerHTML = '-- <span>cycles</span>';
+    elements.rulDetail.textContent = message;
+    elements.rulTimestamp.textContent = '--';
+    elements.rulModelPairing.textContent = 'Experimental pairing unavailable';
+    setRulStatus('Prediction unavailable');
+}
+
+function statusLabel(status) {
+    if (status === 'healthy' || status === 'live') return 'Live';
+    if (status === 'warning' || status === 'stale') return 'Stale';
+    if (status === 'future') return 'Future timestamp';
+    return 'Offline';
+}
+
+function statusClass(status) {
+    if (status === 'healthy' || status === 'live') return 'healthy';
+    if (status === 'warning' || status === 'stale') return 'warning';
+    if (status === 'future') return 'warning';
+    return 'offline';
+}
+
+function renderFleet(fleet) {
+    state.fleet = fleet;
+    const selectedStillExists = fleet.some((engine) => engine.engine_id === state.selectedEngine);
+    if (!selectedStillExists) selectEngine(fleet[0]?.engine_id || null);
+
+    elements.engineSelect.replaceChildren();
+    if (!fleet.length) {
+        const option = new Option('No engines with recent telemetry', '');
+        elements.engineSelect.add(option);
+        elements.engineSelect.disabled = true;
+        setFleetSelectionStatus('No fleet telemetry available', 'warning');
+        clearRul('No engine with recent telemetry is available for prediction lookup.');
+        return;
+    }
+
+    fleet.forEach((engine) => {
+        const option = new Option(`${engine.engine_id} · ${engine.status}`, engine.engine_id);
+        option.selected = engine.engine_id === state.selectedEngine;
+        elements.engineSelect.add(option);
+    });
+    elements.engineSelect.disabled = false;
+    const selected = fleet.find((engine) => engine.engine_id === state.selectedEngine);
+    const selectedStatus = selected?.status || 'offline';
+    setFleetSelectionStatus(statusLabel(selectedStatus), statusClass(selectedStatus));
+}
+
+function renderTelemetry(payload, selectedFleetEngine) {
+    const points = (Array.isArray(payload.points) ? payload.points : []).slice().sort((left, right) => {
+        const leftTime = sourceTimeMillis(left.timestamp);
+        const rightTime = sourceTimeMillis(right.timestamp);
+        if (leftTime === null && rightTime === null) return 0;
+        if (leftTime === null) return 1;
+        if (rightTime === null) return -1;
+        return leftTime - rightTime;
+    });
+    state.values = points;
+    const latest = points.slice().reverse().find((point) => sourceTimeMillis(point.timestamp) !== null) || null;
+    state.latestTelemetryRun = latest?.run_id || null;
+    renderRunOptions(points);
+    // Fleet and telemetry timestamps are both source timestamps. Never replace a
+    // missing source timestamp with the polling time.
+    const ageSeconds = sourceAgeSeconds(latest?.timestamp ?? selectedFleetEngine?.last_seen_at);
+
+    state.lastSuccessTime = new Date();
+    state.hasRenderedData = state.hasRenderedData || points.length > 0;
+    const future = isFutureTimestamp(latest?.timestamp);
+    const engineStatus = future ? 'future' : selectedFleetEngine?.status || 'offline';
+    const normalizedEngineStatus = engineStatus === 'healthy'
+        ? 'live'
+        : engineStatus === 'warning'
+            ? 'stale'
+            : ['live', 'stale', 'offline', 'future'].includes(engineStatus)
+                ? engineStatus
+                : 'offline';
+    setOnlineState(
+        normalizedEngineStatus,
+        points.length
+            ? future
+                ? `Future timestamp for ${state.selectedEngine}; telemetry is not considered current.`
+                : `Last point from ${state.selectedEngine} at cycle ${valueOrDash(latest.cycle, 0)}.`
+            : `No telemetry points were returned for ${state.selectedEngine} in the bounded time range.`
+    );
+    elements.streamCount.textContent = nf.format(points.length);
+    elements.unitCount.textContent = nf.format(state.fleet.length);
+    elements.latestCycle.textContent = latest?.cycle == null ? '--' : nf.format(safeInt(latest.cycle) ?? 0);
+    elements.freshnessMetric.textContent = ageSeconds == null ? '--' : formatAge(ageSeconds);
+    elements.snapshotLabel.textContent = latest ? `${state.selectedEngine} • Cycle ${valueOrDash(latest.cycle, 0)}` : `${state.selectedEngine} • No points in range`;
+    elements.lastUpdate.textContent = latest ? formatTimestamp(latest.timestamp) : '--';
+    elements.freshnessText.textContent = ageSeconds == null ? '--' : formatAge(ageSeconds);
+    elements.unitText.textContent = state.selectedEngine || '--';
+    elements.windowLabel.textContent = 'Last hour · bounded telemetry query';
+    elements.freshnessBar.style.width = `${ageSeconds == null ? 0 : Math.max(12, Math.min(100, 100 - Math.min(100, ageSeconds)))}%`;
+    elements.unitBar.style.width = `${Math.min(100, state.fleet.length * 8)}%`;
+
+    renderTable(points.slice().reverse(), true, `No telemetry points were returned for ${state.selectedEngine} in the last hour.`);
+    if (latest) renderSensors(latest); else renderEmptySensors();
+    updateIngestionChart(points.length, true);
+    elements.errorBox.style.display = 'none';
 }
 
 function showError(error) {
     elements.errorBox.textContent = error;
     elements.errorBox.style.display = 'block';
-    setOnlineState(false, 'Backend API could not be reached.');
+    if (state.systemHealth !== 'healthy') {
+        setSystemHealth('unavailable', 'The dashboard API could not be reached.');
+    } else {
+        setSystemHealth('degraded', 'The dashboard API returned an error while infrastructure remains reachable.');
+    }
+    // Don't reset run selector state if telemetry already populated it
+    if (!state.values || state.values.length === 0) {
+        setRunSelectorState('Runs unavailable', true);
+    }
 }
 
 async function loadDashboard() {
+    if (state.pageExiting) return;
+    if (state.loading) {
+        state.pendingReload = true;
+        return;
+    }
+    state.loading = true;
+    const controller = new AbortController();
+    state.activeRequestController = controller;
+    // Fleet + telemetry get their own generous timeout (30 s).
+    // Health runs fire-and-forget on a separate signal so a slow health
+    // response never cancels the fleet request.
+    const FLEET_TIMEOUT_MS = 30000;
+    const timeout = setTimeout(() => controller.abort('request-timeout'), FLEET_TIMEOUT_MS);
+    const requestOptions = { cache: 'no-store', signal: controller.signal };
     try {
-        const response = await Auth.authedFetch('/api/dashboard/live', { cache: 'no-store' });
-        if (!response.ok) {
-            throw new Error(`Dashboard API returned ${response.status}`);
+        // Only show "Loading runs..." on first load, not on every poll cycle
+        console.log(`[Dashboard] Poll cycle ${state.hasRenderedData ? '(subsequent)' : '(initial)'}, engine: ${state.selectedEngine}`);
+        if (!state.hasRenderedData) {
+            setRunSelectorState('Loading runs...', true);
+        }
+        // Health check is fire-and-forget on its own signal — it must NOT
+        // share the fleet controller, otherwise a slow health response burns
+        // down the timer and cancels the fleet request mid-flight.
+        const healthController = new AbortController();
+        const healthTimeout = setTimeout(() => healthController.abort(), 10000);
+        fetch(`${API_BASE}/api/health`, { cache: 'no-store', signal: healthController.signal })
+            .then((r) => {
+                clearTimeout(healthTimeout);
+                if (r.ok) setSystemHealth('healthy', 'Backend and InfluxDB health check passed.');
+                else setSystemHealth('degraded', `Backend health check returned ${r.status}.`);
+            })
+            .catch(() => { clearTimeout(healthTimeout); /* silent — fleet response will surface any real outage */ });
+        const fleetStartedAt = performance.now();
+        const fleetResponse = await Auth.authedFetch('/api/fleet/status', requestOptions);
+        console.debug(`[Dashboard] fleet/status ${fleetResponse.status} in ${Math.round(performance.now() - fleetStartedAt)}ms`);
+        if (!fleetResponse.ok) throw new Error(`Fleet API returned ${fleetResponse.status}`);
+        const fleetPayload = await fleetResponse.json();
+        const fleet = Array.isArray(fleetPayload.fleet) ? fleetPayload.fleet : [];
+        renderFleet(fleet);
+        if (!state.selectedEngine) {
+            renderTelemetry({ points: [] }, null);
+            return;
         }
 
-        const payload = await response.json();
-        console.log('[Dashboard] Received payload:', payload); // Debug log
-        updateDashboard(payload);
+        const selectedEngine = state.selectedEngine;
+        const selectionVersion = state.selectionVersion;
+        const channels = ['time_cycles', ...trackedSensors].join(',');
+        const from = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        const to = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+        const telemetryUrl = `/api/engines/${encodeURIComponent(selectedEngine)}/telemetry?channels=${encodeURIComponent(channels)}&points=8&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+        const rulUrl = `/api/engines/${encodeURIComponent(selectedEngine)}/rul/latest`;
+        const telemetryStartedAt = performance.now();
+        const telemetryResult = await Promise.allSettled([
+            Auth.authedFetch(telemetryUrl, requestOptions),
+        ]);
+        if (selectionVersion !== state.selectionVersion || selectedEngine !== state.selectedEngine) {
+            state.pendingReload = true;
+            return;
+        }
+        if (telemetryResult[0].status === 'rejected') throw telemetryResult[0].reason;
+        const telemetryResponse = telemetryResult[0].value;
+        console.debug(`[Dashboard] engine telemetry ${telemetryResponse.status} in ${Math.round(performance.now() - telemetryStartedAt)}ms`);
+        if (!telemetryResponse.ok) throw new Error(`Telemetry API returned ${telemetryResponse.status}`);
+        const telemetryPayload = await telemetryResponse.json();
+        renderTelemetry(telemetryPayload, fleet.find((engine) => engine.engine_id === selectedEngine));
+
+        const runId = state.selectedRunId;
+        const rulHistoryUrl = runId
+            ? `/api/engines/${encodeURIComponent(selectedEngine)}/rul/history?points=200&run_id=${encodeURIComponent(runId)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString())}`
+            : rulUrl;
+        const rulResult = await Promise.allSettled([
+            Auth.authedFetch(rulHistoryUrl, requestOptions),
+        ]);
+        if (rulResult[0].status === 'rejected') {
+            console.warn('[Dashboard] RUL request rejected:', rulResult[0].reason);
+            showRulError('Could not load the latest RUL prediction.');
+        } else if (!rulResult[0].value.ok) {
+            console.warn('[Dashboard] RUL request failed:', rulResult[0].value.status);
+            showRulError(`RUL prediction request failed (${rulResult[0].value.status}).`);
+        } else {
+            const rulPayload = await rulResult[0].value.json();
+            if (selectionVersion === state.selectionVersion && selectedEngine === state.selectedEngine) renderRul(rulPayload);
+        }
     } catch (error) {
-        console.error('[Dashboard] Load failed:', error); // Debug log
+        if (state.pageExiting) return;
+        if (error?.name === 'AbortError') {
+            showError('Dashboard request was canceled or timed out.');
+            setFleetSelectionStatus('Dashboard request timed out', 'error');
+            return;
+        }
+        console.error('[Dashboard] Load failed:', error);
         showError(`Live dashboard update failed: ${error.message}`);
+        setFleetSelectionStatus('Fleet connection failed', 'error');
+    } finally {
+        clearTimeout(timeout);
+        if (state.activeRequestController === controller) state.activeRequestController = null;
+        state.loading = false;
+        if (state.pendingReload && !state.pageExiting) {
+            state.pendingReload = false;
+            void loadDashboard();
+        }
     }
 }
+
+elements.engineSelect.addEventListener('change', () => {
+    selectEngine(elements.engineSelect.value || null);
+    void loadDashboard();
+});
+
+elements.runSelect?.addEventListener('change', () => {
+    state.selectedRunId = elements.runSelect.value || null;
+    void loadDashboard();
+});
 
 const refreshButton = document.getElementById('refreshButton');
 if (refreshButton) {
@@ -628,10 +942,12 @@ if (refreshButton) {
             <span>Ready in ${secondsLeft}s</span>
         `;
 
-        const interval = setInterval(() => {
+        if (state.refreshTimer) clearInterval(state.refreshTimer);
+        state.refreshTimer = setInterval(() => {
             secondsLeft--;
             if (secondsLeft <= 0) {
-                clearInterval(interval);
+                clearInterval(state.refreshTimer);
+                state.refreshTimer = null;
                 refreshButton.innerHTML = originalHTML;
                 refreshButton.disabled = false;
                 state.refreshCooldownActive = false;
@@ -653,7 +969,16 @@ if (primaryRefresh) {
 }
 
 loadDashboard();
-setInterval(loadDashboard, POLL_MS);
+state.pollTimer = setInterval(() => {
+    void loadDashboard();
+}, POLL_MS);
+
+window.addEventListener('pagehide', () => {
+    state.pageExiting = true;
+    if (state.pollTimer) clearInterval(state.pollTimer);
+    if (state.refreshTimer) clearInterval(state.refreshTimer);
+    if (state.activeRequestController) state.activeRequestController.abort('page-exit');
+});
 
 // Swap scan-beam gradient between light (red) and dark (white)
 function applyScanBeamTheme(theme) {
@@ -731,4 +1056,3 @@ function handleSidebarResponsive() {
 }
 window.addEventListener('resize', handleSidebarResponsive);
 handleSidebarResponsive();
-

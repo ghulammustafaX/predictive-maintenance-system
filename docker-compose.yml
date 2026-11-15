@@ -1,9 +1,14 @@
+name: predictive-maintenance-system
+
 services:
 
   # ─── ZOOKEEPER (required by Kafka) ───────────────────────────
   zookeeper:
     image: confluentinc/cp-zookeeper:7.4.0
     container_name: pms-zookeeper
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-log:/var/lib/zookeeper/log
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
@@ -20,12 +25,31 @@ services:
       - zookeeper
     ports:
       - "9092:9092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - pms-network
+
+  kafka-topic-init:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: pms-kafka-topic-init
+    depends_on:
+      - kafka
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - >-
+        until kafka-topics --bootstrap-server kafka:9092 --list >/dev/null 2>&1;
+        do sleep 2; done;
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic sensor-telemetry --partitions 1 --replication-factor 1;
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic preprocessed-telemetry --partitions 1 --replication-factor 1;
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic rul-predictions --partitions 1 --replication-factor 1;
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic sensor-telemetry-dead-letter --partitions 1 --replication-factor 1 --config retention.ms=604800000
     networks:
       - pms-network
 
@@ -56,7 +80,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -93,7 +117,7 @@ services:
       SMTP_USER: ${SMTP_USER}
       SMTP_PASSWORD: ${SMTP_PASSWORD}
       SMTP_FROM: ${SMTP_FROM}
-      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5500/frontend/authentication}
     networks:
       - pms-network
 
@@ -101,6 +125,7 @@ services:
   consumer:
     build: ./ingestion
     container_name: pms-consumer
+    restart: on-failure
     depends_on:
       - kafka
       - influxdb
@@ -111,6 +136,51 @@ services:
       INFLUXDB_TOKEN: ${INFLUXDB_TOKEN}
       INFLUXDB_ORG: ${INFLUXDB_ORG}
       INFLUXDB_BUCKET: ${INFLUXDB_BUCKET}
+      INFLUX_TIMEOUT_MS: "10000"
+      KAFKA_MAX_POLL_RECORDS: "5"
+      KAFKA_MAX_POLL_INTERVAL_MS: "600000"
+      KAFKA_COMMIT_TIMEOUT_MS: "10000"
+    networks:
+      - pms-network
+
+  # ─── RUL PREDICTION SERVICE ─────────────────────────────────
+  prediction:
+    build:
+      context: .
+      dockerfile: ml/prediction/Dockerfile
+    container_name: pms-prediction
+    depends_on:
+      kafka-topic-init:
+        condition: service_completed_successfully
+      influxdb:
+        condition: service_started
+    ports:
+      - "8001:8001"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      PREDICTION_INPUT_TOPIC: preprocessed-telemetry
+      PREDICTION_OUTPUT_TOPIC: rul-predictions
+      RUL_CHECKPOINT_PATH: /app/ml/saved/checkpoints/raw/lstm_raw_20260626T082955Z.pt
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUXDB_ORG: ${INFLUXDB_ORG}
+      INFLUXDB_BUCKET: ${INFLUXDB_BUCKET}
+    networks:
+      - pms-network
+
+  preprocessing:
+    build:
+      context: .
+      dockerfile: ml/streaming/Dockerfile
+    container_name: pms-preprocessing
+    depends_on:
+      kafka-topic-init:
+        condition: service_completed_successfully
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      PREPROCESSING_INPUT_TOPIC: sensor-telemetry
+      PREPROCESSING_OUTPUT_TOPIC: preprocessed-telemetry
+      PREPROCESSING_ARTIFACT_DIR: /app/ml/saved_v2_a1/scalers
     networks:
       - pms-network
 
@@ -124,6 +194,8 @@ services:
       KAFKA_BROKER: kafka:9092
       SENSOR_TOPIC: sensor-telemetry
       BEARING_TOPIC: bearing-telemetry
+      DATASET_ID: FD001
+      STREAM_INTERVAL: ${SIMULATOR_STREAM_INTERVAL:-0.01}
     volumes:
       - ./simulator/data:/app/data
     networks:
@@ -134,5 +206,14 @@ networks:
     driver: bridge
 
 volumes:
+  kafka-data:
+    name: predictive-maintenance-system_kafka-data
+    external: true
+  zookeeper-data:
+    name: predictive-maintenance-system_zookeeper-data
+    external: true
+  zookeeper-log:
+    name: predictive-maintenance-system_zookeeper-log
+    external: true
   influxdb-data:
   postgres-data:
