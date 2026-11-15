@@ -1,6 +1,24 @@
 # Predictive Maintenance System
 
-A real-time predictive maintenance platform built on the NASA C-MAPSS turbofan engine dataset. The system streams sensor telemetry through Apache Kafka, stores it in InfluxDB, runs an LSTM model to predict Remaining Useful Life (RUL), and surfaces everything through a live web dashboard with authentication and role-based access control.
+<p align="center">
+  <img src="docs/cover.png" alt="Predictive Maintenance System" width="100%">
+</p>
+
+<p align="center">
+  <strong>An AI-powered platform for monitoring equipment health, predicting failures, and planning maintenance.</strong><br>
+  Built on the NASA C-MAPSS turbofan engine dataset · Kafka · InfluxDB · PyTorch LSTM · FastAPI · Docker
+</p>
+
+<p align="center">
+  <a href="https://youtu.be/4_dOkwqwShI">
+    <img src="https://img.youtube.com/vi/4_dOkwqwShI/maxresdefault.jpg"
+         alt="▶ Watch the PMS demo on YouTube" width="80%">
+  </a>
+  <br>
+  <a href="https://youtu.be/4_dOkwqwShI"><strong>▶ Watch the demo video</strong></a>
+  &nbsp;·&nbsp;
+  <a href="docs/Predictive_Maintenance_System.pptx"><strong>📊 Download the presentation</strong></a>
+</p>
 
 ---
 
@@ -9,10 +27,6 @@ A real-time predictive maintenance platform built on the NASA C-MAPSS turbofan e
 Industrial equipment degrades over time. This system monitors 100 simulated turbofan engines continuously and predicts how many operational cycles remain before each engine is likely to fail. When an engine approaches its end of life, the system raises alerts so maintenance can be scheduled before failure occurs.
 
 The pipeline runs entirely in Docker and processes data end-to-end: a simulator replays real NASA sensor recordings into Kafka, a consumer writes them to InfluxDB, a preprocessing service normalises the stream, and an LSTM prediction service publishes RUL estimates back to Kafka and InfluxDB. The dashboard reads from InfluxDB and PostgreSQL in real time.
-
-> 📽️ **Demo video** — watch the full system running live:
->
-> [![PMS Demo Video](https://img.youtube.com/vi/4_dOkwqwShI/maxresdefault.jpg)](https://youtu.be/4_dOkwqwShI)
 
 ---
 
