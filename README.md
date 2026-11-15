@@ -23,44 +23,9 @@ The pipeline runs entirely in Docker. A simulator replays real NASA sensor recor
 
 ## System Architecture
 
-The platform is built in four layers, each containerised independently:
-
-```mermaid
-flowchart TD
-    subgraph L1["Layer 1 · Data Pipeline"]
-        SIM["🖥️ Simulator\nNASA C-MAPSS"]
-        KAFKA["📨 Apache Kafka\nPort 9092"]
-        CONSUMER["⚙️ Consumer\nInfluxDB Writer"]
-    end
-
-    subgraph L2["Layer 2 · AI Core"]
-        PREP["🔧 Preprocessor\nScaling · Windowing"]
-        LSTM["🧠 LSTM\nPyTorch Inference"]
-    end
-
-    subgraph L3["Layer 3 · Backend & Security"]
-        API["🚀 FastAPI\nPort 8000"]
-        PG["🗄️ PostgreSQL\nUsers · Alerts · Anomalies"]
-    end
-
-    subgraph L4["Layer 4 · Application"]
-        DASH["🌐 Dashboard\nPort 5500"]
-    end
-
-    subgraph STORE["Time-Series Store"]
-        INFLUX["📊 InfluxDB\nPort 8086"]
-    end
-
-    SIM -->|"sensor-telemetry"| KAFKA
-    KAFKA --> CONSUMER
-    KAFKA --> PREP
-    CONSUMER --> INFLUX
-    PREP -->|"preprocessed-telemetry"| LSTM
-    LSTM -->|"rul-predictions"| INFLUX
-    INFLUX --> API
-    API <--> PG
-    API <-->|"REST / HTTP"| DASH
-```
+<p align="center">
+  <img src="docs/architecture.png" alt="PMS System Architecture" width="90%">
+</p>
 
 > See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for a full component breakdown, Kafka topic map, and design decisions.
 
