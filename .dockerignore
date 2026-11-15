@@ -1,0 +1,12 @@
+.git
+.venv
+__pycache__
+*.pyc
+frontend
+backend
+docs
+ml/saved_v1_pre_leakage_fix
+ml/saved/processed
+ml/saved/features
+ml/saved/checkpoints/engineered
+ml/saved/checkpoints/raw/*_metadata.json

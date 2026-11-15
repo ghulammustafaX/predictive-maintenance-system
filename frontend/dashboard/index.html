@@ -36,7 +36,7 @@
             </div>
 
             <nav class="sidebar-nav">
-                <a href="#" class="nav-item active" aria-current="page">
+                <a href="index.html" class="nav-item active" aria-current="page">
                     <!-- Dashboard icon -->
                     <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
                         <rect x="3" y="3" width="7" height="9" rx="1" />
@@ -45,6 +45,23 @@
                         <rect x="3" y="16" width="7" height="5" rx="1" />
                     </svg>
                     <span>Dashboard</span>
+                </a>
+
+                <a href="alerts.html" class="nav-item">
+                    <!-- Alerts icon -->
+                    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                        <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                    </svg>
+                    <span>Alerts</span>
+                </a>
+
+                <a href="anomalies.html" class="nav-item">
+                    <!-- Anomalies icon -->
+                    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                    </svg>
+                    <span>Anomalies</span>
                 </a>
 
                 <a href="#" class="nav-item disabled" aria-disabled="true">
@@ -57,25 +74,14 @@
                     <span>Analytics</span>
                 </a>
 
-                <a href="#" class="nav-item disabled" aria-disabled="true">
-                    <!-- Alerts icon -->
+                <!-- Users link: revealed for admin by dashboard.js -->
+                <a href="users.html" class="nav-item" id="navUsers" style="display:none;" aria-label="User Management">
                     <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
-                        <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                        <circle cx="9" cy="7" r="4"/>
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
                     </svg>
-                    <span>Alerts</span>
-                </a>
-
-                <a href="#" class="nav-item disabled" aria-disabled="true">
-                    <!-- Audit Logs icon -->
-                    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                        <polyline points="14 2 14 8 20 8" />
-                        <line x1="16" y1="13" x2="8" y2="13" />
-                        <line x1="16" y1="17" x2="8" y2="17" />
-                        <polyline points="10 9 9 9 8 9" />
-                    </svg>
-                    <span>Audit Logs</span>
+                    <span>Users</span>
                 </a>
             </nav>
 
@@ -131,21 +137,39 @@
 
             <div class="page-shell">
 
+                <!-- Fleet context keeps the established dashboard layout while scoping live telemetry to one composite engine. -->
+                <section class="fleet-context" aria-label="Selected engine telemetry">
+                    <div>
+                        <span class="fleet-context-label">Telemetry source</span>
+                        <label for="engineSelect">Selected engine</label>
+                    </div>
+                    <select id="engineSelect" disabled aria-describedby="engineSelectionHint">
+                        <option>Loading available engines…</option>
+                    </select>
+                    <label for="runSelect">Telemetry run</label>
+                    <select id="runSelect" disabled aria-describedby="runSelectionHint">
+                        <option>Loading runs…</option>
+                    </select>
+                    <div class="fleet-selection-status" id="fleetSelectionStatus" aria-live="polite">Loading fleet status…</div>
+                    <p class="fleet-selection-hint" id="engineSelectionHint">Engine IDs combine C-MAPSS dataset and unit, for example FD001-007.</p>
+                    <p class="fleet-selection-hint" id="runSelectionHint">RUL predictions are filtered to the selected telemetry run.</p>
+                </section>
+
                 <!-- Grid of summary metrics (KPIs at top) -->
                 <section class="metrics-grid" aria-label="Live metrics">
                     <div class="metric-card primary">
-                        <div class="tag"><span class="pulse"></span> Stream status</div>
+                        <div class="tag"><span class="pulse"></span> Selected telemetry</div>
                         <div class="stat" id="streamCount">
                             <div class="skeleton-text" style="width: 50%; height: 2rem; margin: 4px 0;"></div>
                         </div>
-                        <div class="sub">Records visible in the last 24 hours</div>
+                        <div class="sub">Bounded telemetry points loaded for the selected engine</div>
                     </div>
                     <div class="metric-card">
-                        <div class="tag"><span class="pulse"></span> Active units</div>
+                        <div class="tag"><span class="pulse"></span> Known units</div>
                         <div class="stat" id="unitCount">
                             <div class="skeleton-text" style="width: 40%; height: 2rem; margin: 4px 0;"></div>
                         </div>
-                        <div class="sub">Unique engine units in the current window</div>
+                        <div class="sub">Engine identities returned by the fleet query</div>
                     </div>
                     <div class="metric-card">
                         <div class="tag"><span class="pulse"></span> Latest cycle</div>
@@ -209,8 +233,8 @@
                                 </div>
                             </div>
                             <div class="chart-header">
-                                <span class="chart-title">Real-Time Ingestion Frequency</span>
-                                <span class="chart-legend"><span class="dot-green"></span> InfluxDB Ingests</span>
+                                <span class="chart-title">Loaded Telemetry Points per Query</span>
+                                <span class="chart-legend"><span class="dot-green"></span> Selected engine query</span>
                             </div>
                             <div class="chartjs-container">
                                 <canvas id="ingestionChart"></canvas>
@@ -402,7 +426,7 @@
                                     <div class="note-indicator-dot code"></div>
                                     <div class="feed-content">
                                         <strong>Backend API</strong>
-                                        <small>http://localhost:8000/api/dashboard/live</small>
+                                        <small>http://127.0.0.1:8000/api/dashboard/live</small>
                                     </div>
                                 </div>
                                 <div class="feed-item note">
@@ -413,6 +437,22 @@
                                     </div>
                                 </div>
                             </div>
+                        </section>
+
+                        <section class="panel rul-panel" aria-live="polite">
+                            <div class="panel-head">
+                                <div>
+                                    <h3>Remaining useful life</h3>
+                                    <p>Experimental prediction for the selected engine.</p>
+                                </div>
+                                <div class="status-chip" id="rulStatus">Awaiting data</div>
+                            </div>
+                            <div class="rul-reading" id="rulCycles">-- <span>cycles</span></div>
+                            <p class="rul-detail" id="rulDetail">Select an engine to load its latest stored prediction.</p>
+                            <dl class="rul-metadata">
+                                <div><dt>Prediction time</dt><dd id="rulTimestamp">--</dd></div>
+                                <div><dt>Model / preprocessing</dt><dd id="rulModelPairing">Experimental pairing unavailable</dd></div>
+                            </dl>
                         </section>
                     </aside>
                 </section>
@@ -439,6 +479,7 @@
         window.PMS_LOGIN_PATH = '../authentication/login.html';
         window.PMS_CHANGE_PASSWORD_PATH = '../authentication/change-password.html';
         window.PMS_PROFILE_PATH = '../authentication/profile.html';
+        window.PMS_API_BASE = 'http://127.0.0.1:8000';
     </script>
 
     <!-- Shared Auth token store and HTTP client -->

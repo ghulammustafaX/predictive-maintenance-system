@@ -1,134 +1,246 @@
-"""
-Kafka Consumer → InfluxDB Writer
-Module 2: Stream Ingestion
-"""
+"""Reliable Kafka-to-InfluxDB telemetry consumer."""
 
-import os
+from __future__ import annotations
+
 import json
+import logging
+import os
 import time
-from kafka import KafkaConsumer
-from kafka.errors import KafkaError
+from datetime import datetime
+from typing import Any
+
+from dotenv import load_dotenv
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
-from dotenv import load_dotenv
+from kafka import KafkaConsumer, KafkaProducer
+from kafka.errors import KafkaError
+from kafka.structs import OffsetAndMetadata, TopicPartition
 
 load_dotenv()
 
-# Configuration
-KAFKA_BROKER = os.getenv('KAFKA_BROKER', 'kafka:9092')
-SENSOR_TOPIC = os.getenv('SENSOR_TOPIC', 'sensor-telemetry')
-CONSUMER_GROUP = 'influxdb-writer-group'
+logger = logging.getLogger("pms.ingestion")
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
-INFLUXDB_URL = os.getenv('INFLUXDB_URL', 'http://influxdb:8086')
-INFLUXDB_TOKEN = os.getenv('INFLUXDB_TOKEN')
-INFLUXDB_ORG = os.getenv('INFLUXDB_ORG', 'pms-org')
-INFLUXDB_BUCKET = os.getenv('INFLUXDB_BUCKET', 'sensor-data')
+KAFKA_BROKER = os.getenv("KAFKA_BROKER", "kafka:9092")
+SENSOR_TOPIC = os.getenv("SENSOR_TOPIC", "sensor-telemetry")
+CONSUMER_GROUP = os.getenv("CONSUMER_GROUP", "influxdb-writer-group")
+DEAD_LETTER_TOPIC = os.getenv("DEAD_LETTER_TOPIC", f"{SENSOR_TOPIC}-dead-letter")
+
+INFLUXDB_URL = os.getenv("INFLUXDB_URL", "http://influxdb:8086")
+INFLUXDB_TOKEN = os.getenv("INFLUXDB_TOKEN")
+INFLUXDB_ORG = os.getenv("INFLUXDB_ORG", "pms-org")
+INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET", "sensor-data")
+
+MAX_WRITE_RETRIES = int(os.getenv("INFLUX_MAX_WRITE_RETRIES", "3"))
+RETRY_BACKOFF_SECONDS = float(os.getenv("INFLUX_RETRY_BACKOFF_SECONDS", "1"))
+INFLUX_TIMEOUT_MS = int(os.getenv("INFLUX_TIMEOUT_MS", "10000"))
+POLL_TIMEOUT_MS = int(os.getenv("KAFKA_POLL_TIMEOUT_MS", "1000"))
+MAX_POLL_RECORDS = int(os.getenv("KAFKA_MAX_POLL_RECORDS", "5"))
+MAX_POLL_INTERVAL_MS = int(os.getenv("KAFKA_MAX_POLL_INTERVAL_MS", "600000"))
+COMMIT_TIMEOUT_MS = int(os.getenv("KAFKA_COMMIT_TIMEOUT_MS", "10000"))
+
+REQUIRED_FIELDS = (
+    "unit_id",
+    "time_cycles",
+    "operational_setting_1",
+    "operational_setting_2",
+    "operational_setting_3",
+)
+NUMERIC_FIELDS = REQUIRED_FIELDS[2:]
 
 
-def create_kafka_consumer():
-    """Initialize Kafka consumer with retry."""
-    print(f"🔌 Connecting to Kafka: {KAFKA_BROKER}")
-    print(f"📥 Topic: {SENSOR_TOPIC}")
-    
-    max_retries = 30
-    retry_delay = 2
-    
-    for attempt in range(max_retries):
+def create_kafka_consumer() -> KafkaConsumer:
+    """Initialize a raw-message Kafka consumer with manual commits."""
+    logger.info("Connecting to Kafka broker=%s topic=%s", KAFKA_BROKER, SENSOR_TOPIC)
+    for attempt in range(30):
         try:
             consumer = KafkaConsumer(
                 SENSOR_TOPIC,
                 bootstrap_servers=KAFKA_BROKER,
                 group_id=CONSUMER_GROUP,
-                value_deserializer=lambda m: json.loads(m.decode('utf-8')),
-                auto_offset_reset='earliest',
-                enable_auto_commit=True
+                value_deserializer=lambda value: value,
+                auto_offset_reset="earliest",
+                enable_auto_commit=False,
+                max_poll_records=MAX_POLL_RECORDS,
+                max_poll_interval_ms=MAX_POLL_INTERVAL_MS,
             )
-            print(f"✅ Connected to Kafka")
+            logger.info("Kafka consumer connected")
             return consumer
-        except KafkaError as e:
-            print(f"⚠️  Attempt {attempt + 1}/{max_retries} failed: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(retry_delay)
-            else:
-                raise
+        except KafkaError:
+            logger.exception("Kafka connection failed attempt=%d", attempt + 1)
+            if attempt < 29:
+                time.sleep(2)
+    raise RuntimeError("Kafka connection failed after 30 attempts")
 
 
-def create_influxdb_client():
-    """Initialize InfluxDB client."""
-    print(f"🔌 Connecting to InfluxDB: {INFLUXDB_URL}")
-    
+def create_influxdb_client() -> tuple[InfluxDBClient, Any]:
+    """Initialize the synchronous InfluxDB writer."""
+    logger.info("Connecting to InfluxDB url=%s bucket=%s", INFLUXDB_URL, INFLUXDB_BUCKET)
     if not INFLUXDB_TOKEN:
         raise ValueError("INFLUXDB_TOKEN not set")
-    
-    client = InfluxDBClient(url=INFLUXDB_URL, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG)
-    write_api = client.write_api(write_options=SYNCHRONOUS)
-    
-    print(f"✅ Connected to InfluxDB")
-    print(f"📊 Bucket: {INFLUXDB_BUCKET}")
-    
-    return client, write_api
+    client = InfluxDBClient(
+        url=INFLUXDB_URL,
+        token=INFLUXDB_TOKEN,
+        org=INFLUXDB_ORG,
+        timeout=INFLUX_TIMEOUT_MS,
+    )
+    return client, client.write_api(write_options=SYNCHRONOUS)
 
 
-def write_to_influxdb(write_api, message):
-    """Write Kafka message to InfluxDB."""
+def decode_message(value: bytes | str | dict[str, Any]) -> dict[str, Any]:
+    """Decode and validate a telemetry payload before it can be acknowledged."""
+    if isinstance(value, dict):
+        payload = value
+    else:
+        payload = json.loads(value.decode("utf-8") if isinstance(value, bytes) else value)
+    if not isinstance(payload, dict):
+        raise ValueError("payload must be a JSON object")
+    missing = [field for field in REQUIRED_FIELDS if field not in payload]
+    if missing:
+        raise ValueError(f"missing required fields: {','.join(missing)}")
+    int(payload["unit_id"])
+    int(payload["time_cycles"])
+    for field in NUMERIC_FIELDS:
+        float(payload[field])
+    if not payload.get("source_timestamp") and not payload.get("timestamp"):
+        raise ValueError("missing required field: timestamp")
+    return payload
+
+
+def build_point(message: dict[str, Any]) -> Point:
+    """Build a deterministic point identity for safe replay."""
+    payload = decode_message(message)
+    dataset_id = str(payload.get("dataset_id", "unknown"))
+    run_id = str(payload.get("run_id", "default"))
+    cycle = int(payload["time_cycles"])
+    point = (
+        Point("sensor_telemetry")
+        .tag("dataset_id", dataset_id)
+        .tag("unit_id", str(int(payload["unit_id"])))
+        .tag("run_id", run_id)
+        .tag("cycle", str(cycle))
+        .field("time_cycles", cycle)
+        .field("operational_setting_1", float(payload["operational_setting_1"]))
+        .field("operational_setting_2", float(payload["operational_setting_2"]))
+        .field("operational_setting_3", float(payload["operational_setting_3"]))
+    )
+    for index in range(1, 22):
+        sensor_key = f"sensor_{index}"
+        if payload.get(sensor_key) is not None:
+            point = point.field(sensor_key, float(payload[sensor_key]))
+
+    source_timestamp = payload.get("source_timestamp") or payload.get("timestamp")
+    if not source_timestamp:
+        raise ValueError("missing required field: timestamp")
+    point = point.time(datetime.fromisoformat(str(source_timestamp).replace("Z", "+00:00")))
+    return point
+
+
+def write_to_influxdb(write_api: Any, message: dict[str, Any]) -> bool:
+    """Write a point with bounded retries; raise when it is not durable."""
+    point = build_point(message)
+    for attempt in range(MAX_WRITE_RETRIES):
+        try:
+            write_api.write(bucket=INFLUXDB_BUCKET, org=INFLUXDB_ORG, record=point)
+            return True
+        except Exception as exc:
+            status = getattr(exc, "status", None)
+            if status in (401, 403):
+                logger.error("Influx write rejected status=%s", status)
+                raise
+            if attempt == MAX_WRITE_RETRIES - 1:
+                logger.error("Influx write exhausted retries attempts=%d", MAX_WRITE_RETRIES)
+                raise
+            delay = RETRY_BACKOFF_SECONDS * (2**attempt)
+            logger.warning("Influx write failed; retrying attempt=%d delay=%.2f", attempt + 1, delay)
+            time.sleep(delay)
+    raise RuntimeError("unreachable")
+
+
+def dead_letter(producer: KafkaProducer, message: Any, error: Exception) -> None:
+    """Durably publish an invalid record before its source offset is committed."""
+    raw = message.value if hasattr(message, "value") else message
+    payload = {
+        "error": str(error),
+        "source_topic": getattr(message, "topic", SENSOR_TOPIC),
+        "source_partition": getattr(message, "partition", None),
+        "source_offset": getattr(message, "offset", None),
+        "value": raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw,
+    }
+    producer.send(DEAD_LETTER_TOPIC, value=payload).get(timeout=10)
+    logger.error(
+        "Invalid telemetry sent to dead letter topic=%s partition=%s offset=%s",
+        DEAD_LETTER_TOPIC,
+        getattr(message, "partition", None),
+        getattr(message, "offset", None),
+    )
+
+
+def create_dead_letter_producer() -> KafkaProducer:
+    """Create a producer whose future confirms an all-replica broker ack."""
+    return KafkaProducer(
+        bootstrap_servers=KAFKA_BROKER,
+        value_serializer=lambda value: json.dumps(value).encode("utf-8"),
+        acks="all",
+        retries=5,
+        request_timeout_ms=10000,
+        max_in_flight_requests_per_connection=1,
+    )
+
+
+def process_message(write_api: Any, producer: KafkaProducer, message: Any) -> None:
+    """Handle one record; return only after persistence or durable DLQ."""
     try:
-        point = Point("sensor_telemetry") \
-            .tag("unit_id", str(int(message['unit_id']))) \
-            .field("time_cycles", int(message['time_cycles'])) \
-            .field("operational_setting_1", float(message['operational_setting_1'])) \
-            .field("operational_setting_2", float(message['operational_setting_2'])) \
-            .field("operational_setting_3", float(message['operational_setting_3']))
-        
-        # Add 21 sensors
-        for i in range(1, 22):
-            sensor_key = f'sensor_{i}'
-            if sensor_key in message and message[sensor_key] is not None:
-                point = point.field(sensor_key, float(message[sensor_key]))
-        
-        write_api.write(bucket=INFLUXDB_BUCKET, org=INFLUXDB_ORG, record=point)
-        return True
-    
-    except Exception as e:
-        print(f"❌ Write failed: {e}")
-        return False
+        payload = decode_message(message.value)
+        write_to_influxdb(write_api, payload)
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        dead_letter(producer, message, exc)
+    except Exception:
+        logger.exception(
+            "Telemetry processing failed; offset remains uncommitted topic=%s partition=%s offset=%s",
+            message.topic,
+            message.partition,
+            message.offset,
+        )
+        raise
 
 
-def consume_and_write():
-    """Main consumer loop."""
+def commit_message(consumer: KafkaConsumer, message: Any) -> None:
+    """Commit exactly the next offset after a durably handled record."""
+    partition = TopicPartition(message.topic, message.partition)
+    consumer.commit(
+        {partition: OffsetAndMetadata(message.offset + 1, None, -1)},
+        timeout_ms=COMMIT_TIMEOUT_MS,
+    )
+
+
+def consume_and_write() -> None:
+    """Poll records, preserve order, and commit only after durable handling."""
     consumer = create_kafka_consumer()
     client, write_api = create_influxdb_client()
-    
-    print("🚀 Starting consumer loop...")
-    print("-" * 60)
-    
+    producer = create_dead_letter_producer()
     message_count = 0
-    
     try:
-        for message in consumer:
-            payload = message.value
-            
-            if write_to_influxdb(write_api, payload):
-                message_count += 1
-                
-                if message_count % 100 == 0:
-                    print(f"✅ {message_count} messages | Unit: {int(payload['unit_id'])} | Cycle: {int(payload['time_cycles'])}")
-    
+        while True:
+            records = consumer.poll(timeout_ms=POLL_TIMEOUT_MS, max_records=MAX_POLL_RECORDS)
+            for _, partition_records in records.items():
+                for message in partition_records:
+                    process_message(write_api, producer, message)
+                    commit_message(consumer, message)
+                    message_count += 1
+                    if message_count % 100 == 0:
+                        logger.info("Processed messages=%d", message_count)
     except KeyboardInterrupt:
-        print("\n⚠️  Interrupted")
-    
+        logger.info("Consumer interrupted")
     finally:
+        producer.flush()
+        producer.close()
         consumer.close()
         client.close()
-        print(f"✅ Total processed: {message_count}")
+        logger.info("Consumer closed processed=%d", message_count)
 
 
-def main():
-    print("=" * 60)
-    print("KAFKA → INFLUXDB CONSUMER")
-    print("Module 2: Stream Ingestion")
-    print("=" * 60)
-    print()
-    
+def main() -> None:
     consume_and_write()
 
 

@@ -31,32 +31,42 @@ def build_for_sub_dataset(sub_dataset: str) -> None:
     print(f"  Loaded train: {train_raw.shape}, test: {test_raw.shape}, "
           f"RUL entries: {len(true_rul)}")
 
-    # 2. Missing Value Handler
-    train_clean = prep.handle_missing_values(train_raw)
-    test_clean = prep.handle_missing_values(test_raw)
+    # 2. Missing Value Handler and RUL labels
+    train_labeled = prep.assign_rul_train(prep.handle_missing_values(train_raw))
+    test_labeled = prep.assign_rul_test(
+        prep.handle_missing_values(test_raw), true_rul
+    )
 
-    # 3. Outlier Detection & Removal
-    train_clean = prep.clip_outliers(train_clean, OUTLIER_Z_THRESHOLD)
-    test_clean = prep.clip_outliers(test_clean, OUTLIER_Z_THRESHOLD)
-
-    # 4. RUL Label Assignment (before normalization — RUL isn't scaled)
-    train_labeled = prep.assign_rul_train(train_clean)
-    test_labeled = prep.assign_rul_test(test_clean, true_rul)
-
-    # 5. Train/Validation Split (by unit ID, before fitting scaler so the
-    #    scaler only ever sees genuine training units)
+    # 3. Train/Validation Split (by unit ID before fitting any statistics)
     train_split, val_split = prep.split_by_unit(train_labeled)
+    stats = prep.fit_training_stats(train_split, sub_dataset)
+    medians = {column: values["median"] for column, values in stats.items()}
+    train_split = prep.clip_outliers(
+        prep.handle_missing_values(train_split, medians),
+        OUTLIER_Z_THRESHOLD,
+        stats,
+    )
+    val_split = prep.clip_outliers(
+        prep.handle_missing_values(val_split, medians),
+        OUTLIER_Z_THRESHOLD,
+        stats,
+    )
+    test_labeled = prep.clip_outliers(
+        prep.handle_missing_values(test_labeled, medians),
+        OUTLIER_Z_THRESHOLD,
+        stats,
+    )
     print(f"  Train units: {train_split['unit_id'].nunique()}, "
           f"Val units: {val_split['unit_id'].nunique()}, "
           f"Test units: {test_labeled['unit_id'].nunique()}")
 
-    # 6. Min-Max Normalization (fit on train split only)
+    # 4. Min-Max Normalization (fit on train split only)
     scaler = prep.fit_scaler(train_split, sub_dataset)
     train_scaled = prep.apply_scaler(train_split, scaler)
     val_scaled = prep.apply_scaler(val_split, scaler)
     test_scaled = prep.apply_scaler(test_labeled, scaler)
 
-    # 7. Sliding Window Generator
+    # 5. Sliding Window Generator
     train_windows = prep.generate_windows(train_scaled, WINDOW_SIZE, last_window_only=False)
     val_windows = prep.generate_windows(val_scaled, WINDOW_SIZE, last_window_only=False)
     test_windows = prep.generate_windows(test_scaled, WINDOW_SIZE, last_window_only=True)

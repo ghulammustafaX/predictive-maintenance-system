@@ -78,6 +78,27 @@
             successBanner.classList.add('visible');
         }
 
+        async function readApiResponse(response) {
+            const text = await response.text();
+            if (!text) return {};
+            try {
+                return JSON.parse(text);
+            } catch {
+                return { detail: text };
+            }
+        }
+
+        function registrationErrorMessage(response, data) {
+            if (response.status === 409) return data.detail || 'This account cannot be created with those details.';
+            if (response.status === 422) {
+                return Array.isArray(data.detail)
+                    ? data.detail.map(d => d.msg).join(', ')
+                    : data.detail || 'Enter valid registration details.';
+            }
+            if (response.status >= 500) return 'The registration service is temporarily unavailable.';
+            return data.detail || `Registration failed (HTTP ${response.status}).`;
+        }
+
         passwordInput.addEventListener('input', () => {
             const value = passwordInput.value;
 
@@ -141,13 +162,10 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ full_name, email, password }),
                 });
-                const data = await response.json();
+                const data = await readApiResponse(response);
 
                 if (!response.ok) {
-                    const detail = Array.isArray(data.detail)
-                        ? data.detail.map(d => d.msg).join(', ')
-                        : data.detail;
-                    showError(detail || 'Could not create account.');
+                    showError(registrationErrorMessage(response, data));
                     return;
                 }
 
@@ -157,8 +175,12 @@
                 confirmPasswordError.style.display  = 'none';
                 passwordRules.textContent = 'Must be 8+ characters with an uppercase letter, lowercase letter, digit, and special character.';
                 passwordRules.style.color = 'var(--muted)';
-            } catch {
-                showError('Could not reach the server. Is the backend running?');
+            } catch (error) {
+                if (error?.name === 'AbortError') {
+                    showError('Registration timed out. Check the backend connection and try again.');
+                } else {
+                    showError('Could not reach the registration service. Check the backend connection and try again.');
+                }
             } finally {
                 submitButton.disabled = false;
                 submitButton.textContent = 'Create account';

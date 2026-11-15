@@ -78,3 +78,21 @@ class GoogleLoginRequest(BaseModel):
 class AuthConfigResponse(BaseModel):
     google_client_id: str | None
 
+
+class UpdateRoleRequest(BaseModel):
+    """Admin-only: promote or demote a user to a new role."""
+    role: UserRole
+
+
+class UserListOut(BaseModel):
+    id: str
+    email: str
+    full_name: str
+    role: UserRole
+    is_active: bool
+    is_verified: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+

@@ -32,9 +32,15 @@ def _uuid() -> str:
 
 
 class UserRole(str, enum.Enum):
-    """Three roles, matching the scope doc exactly."""
+    """Four roles matching the scope doc:
+      ADMIN               — manage users, roles, and all system settings.
+      MAINTENANCE_ENGINEER — acknowledge alerts, run detection, manage maintenance.
+      FLOOR_OPERATOR      — report faults (pending), read-only access to alerts/anomalies.
+      VIEWER               — strictly read-only, no state changes.
+    """
     ADMIN = "admin"
     MAINTENANCE_ENGINEER = "maintenance_engineer"
+    FLOOR_OPERATOR = "floor_operator"
     VIEWER = "viewer"
 
 
@@ -119,3 +125,63 @@ class AuditLog(Base):
     detail: Mapped[str | None] = mapped_column(String, nullable=True)
     ip_address: Mapped[str | None] = mapped_column(String, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(), default=_now)
+
+
+# ---------------------------------------------------------------------------
+# Module 7 — Anomaly Detection persistence
+# ---------------------------------------------------------------------------
+
+class AnomalyRecord(Base):
+    """Persisted anomaly event from the detection pipeline."""
+    __tablename__ = "anomaly_records"
+
+    event_id:         Mapped[str]           = mapped_column(String, primary_key=True)
+    dataset_id:       Mapped[str]           = mapped_column(String, nullable=False, index=True)
+    unit_id:          Mapped[str]           = mapped_column(String, nullable=False, index=True)
+    run_id:           Mapped[str]           = mapped_column(String, nullable=False, index=True)
+    cycle:            Mapped[int]           = mapped_column(nullable=False)
+    timestamp:        Mapped[str]           = mapped_column(String, nullable=False)   # ISO-8601
+    sensor:           Mapped[str]           = mapped_column(String, nullable=False)
+    detection_method: Mapped[str]           = mapped_column(String, nullable=False)   # "zscore" | "threshold"
+    observed_value:   Mapped[float]         = mapped_column(nullable=False)
+    severity:         Mapped[str]           = mapped_column(String, nullable=False)   # "low"|"medium"|"high"|"critical"
+    score:            Mapped[float]         = mapped_column(nullable=False)
+    status:           Mapped[str]           = mapped_column(String, default="open")   # "open" | "resolved"
+    created_at:       Mapped[datetime]      = mapped_column(DateTime(), default=_now)
+
+
+# ---------------------------------------------------------------------------
+# Module 9 — Alerts and Notifications persistence
+# ---------------------------------------------------------------------------
+
+class Alert(Base):
+    """Persisted alert record. Created by threshold evaluation or anomaly bridge."""
+    __tablename__ = "alerts"
+
+    id:               Mapped[str]           = mapped_column(String, primary_key=True, default=_uuid)
+    dedup_key:        Mapped[str]           = mapped_column(String, nullable=False, index=True)
+    alert_type:       Mapped[str]           = mapped_column(String, nullable=False)   # "rul_low" | "anomaly"
+    severity:         Mapped[str]           = mapped_column(String, nullable=False)   # "warning"|"critical"|"low"|"medium"|"high"
+    dataset_id:       Mapped[str]           = mapped_column(String, nullable=False, index=True)
+    unit_id:          Mapped[str]           = mapped_column(String, nullable=False, index=True)
+    run_id:           Mapped[str]           = mapped_column(String, nullable=False)
+    cycle:            Mapped[int | None]    = mapped_column(nullable=True)
+    message:          Mapped[str]           = mapped_column(String, nullable=False)
+    status:           Mapped[str]           = mapped_column(String, default="open")   # "open"|"acknowledged"|"resolved"
+    source_event_id:  Mapped[str | None]    = mapped_column(String, nullable=True)    # links back to AnomalyRecord
+    created_at:       Mapped[datetime]      = mapped_column(DateTime(), default=_now)
+    acknowledged_at:  Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+    acknowledged_by:  Mapped[str | None]    = mapped_column(ForeignKey("users.id"), nullable=True)
+    resolved_at:      Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+
+
+class AlertAudit(Base):
+    """Immutable audit trail for every alert state change."""
+    __tablename__ = "alert_audit"
+
+    id:         Mapped[str]      = mapped_column(String, primary_key=True, default=_uuid)
+    alert_id:   Mapped[str]      = mapped_column(ForeignKey("alerts.id"), nullable=False, index=True)
+    user_id:    Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    action:     Mapped[str]      = mapped_column(String, nullable=False)   # "created"|"acknowledged"|"resolved"
+    detail:     Mapped[str | None] = mapped_column(String, nullable=True)
+    timestamp:  Mapped[datetime] = mapped_column(DateTime(), default=_now)

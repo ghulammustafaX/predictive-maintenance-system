@@ -38,14 +38,14 @@ from app.database import get_db
 from app.email_utils import send_password_reset_email, send_verification_email
 from app.models import (
     AuditLog, AuthProvider, EmailVerificationToken,
-    PasswordResetToken, RevokedToken, User,
+    PasswordResetToken, RevokedToken, User, UserRole,
 )
-from app.rbac import get_current_user, oauth2_scheme
+from app.rbac import get_current_user, oauth2_scheme, require_role
 from app.schemas import (
     AuthConfigResponse, ChangePasswordRequest, ForgotPasswordRequest,
     GoogleLoginRequest, LoginRequest, MessageResponse,
     RefreshRequest, ResetPasswordRequest, SetPasswordRequest,
-    TokenPair, UserOut, UserRegister,
+    TokenPair, UserOut, UserRegister, UserListOut, UpdateRoleRequest,
 )
 from app.security import (
     WeakPasswordError, create_access_token, create_refresh_token, decode_token,
@@ -215,7 +215,7 @@ def register(
         full_name=payload.full_name,
         hashed_password=hash_password(payload.password),
         auth_provider=AuthProvider.LOCAL,
-        role=payload.role,
+        role=UserRole.VIEWER,  # Security: always create as viewer. Admins promote manually.
     )
     db.add(user)
     db.commit()
@@ -259,6 +259,53 @@ def verify_email(token: str, db: Session = Depends(get_db)):
     return {"message": "Email verified successfully. You can now log in."}
 
 
+@router.post("/resend-verification", response_model=MessageResponse)
+def resend_verification(
+    payload: ForgotPasswordRequest,  # Reuse this schema (has email field)
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Resend email verification link for unverified accounts."""
+    user = db.query(User).filter(User.email == payload.email).first()
+    
+    # Generic message to avoid email enumeration
+    generic_message = {"message": "If that email is registered and unverified, a new verification link has been sent."}
+    
+    if not user:
+        return generic_message
+    
+    # Already verified - no need to resend
+    if user.is_verified:
+        return generic_message
+    
+    # Google accounts are auto-verified
+    if user.auth_provider == AuthProvider.GOOGLE:
+        return generic_message
+    
+    # Invalidate old tokens for this user
+    old_tokens = (
+        db.query(EmailVerificationToken)
+        .filter(EmailVerificationToken.user_id == user.id, EmailVerificationToken.used == False)
+        .all()
+    )
+    for old_token in old_tokens:
+        old_token.used = True
+    
+    # Generate new token
+    token = generate_opaque_token()
+    db.add(EmailVerificationToken(
+        user_id=user.id,
+        token=token,
+        expires_at=datetime.utcnow() + timedelta(hours=settings.EMAIL_VERIFICATION_TTL_HOURS),
+    ))
+    db.commit()
+    
+    background_tasks.add_task(send_verification_email, user.email, user.full_name, token)
+    _log_event(db, "verification_resent", user.id, request)
+    return generic_message
+
+
 # ---------------------------------------------------------------------------
 # Login / Refresh / Logout
 # ---------------------------------------------------------------------------
@@ -291,6 +338,14 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
 
     if not user.is_active:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Account is disabled.")
+
+    # ── Email verification check ──────────────────────────────────────
+    if not user.is_verified:
+        _log_event(db, "login_failed", user.id, request, detail="email not verified")
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Please verify your email address before logging in. Check your inbox for the verification link.",
+        )
 
     _log_event(db, "login_success", user.id, request)
     return _issue_tokens(user)
@@ -489,3 +544,91 @@ def reset_password(
     db.commit()
     _log_event(db, "password_reset", user.id, request)
     return {"message": "Password has been reset. You can now log in."}
+
+
+# ---------------------------------------------------------------------------
+# Module 8 — User management (Admin only)
+# ---------------------------------------------------------------------------
+
+@router.get("/users", response_model=list[UserListOut])
+def list_users(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_role(UserRole.ADMIN)),
+):
+    """Admin-only: list all registered users. Excludes hashed_password."""
+    return db.query(User).order_by(User.created_at).all()
+
+
+@router.get("/audit")
+def list_audit_log(
+    event: str | None = None,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_role(UserRole.ADMIN)),
+):
+    """Admin-only: recent audit log entries, optionally filtered by event type."""
+    q = db.query(AuditLog).order_by(AuditLog.timestamp.desc())
+    if event:
+        q = q.filter(AuditLog.event == event)
+    rows = q.limit(min(limit, 200)).all()
+    result = []
+    for row in rows:
+        actor_email = None
+        if row.user_id:
+            actor = db.get(User, row.user_id)
+            actor_email = actor.email if actor else row.user_id
+        result.append({
+            "id": row.id,
+            "user_id": row.user_id,
+            "actor_email": actor_email,
+            "event": row.event,
+            "detail": row.detail,
+            "ip_address": row.ip_address,
+            "timestamp": row.timestamp.isoformat() if row.timestamp else None,
+        })
+    return result
+
+
+@router.patch("/users/{user_id}/role", response_model=UserOut)
+def update_user_role(
+    user_id: str,
+    payload: UpdateRoleRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_role(UserRole.ADMIN)),
+):
+    """Admin-only: promote or demote a user to a new role.
+
+    Security: this is the ONLY way to change a user's role. Registration
+    always creates viewers, and users cannot self-promote.
+    """
+    target = db.get(User, user_id)
+    if not target:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found.")
+
+    if target.id == admin.id:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="You cannot change your own role.",
+        )
+
+    # Guard: prevent demoting the last active admin
+    if target.role == UserRole.ADMIN and payload.role != UserRole.ADMIN:
+        admin_count = db.query(User).filter(
+            User.role == UserRole.ADMIN, User.is_active == True
+        ).count()
+        if admin_count <= 1:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail="Cannot demote the only remaining Administrator.",
+            )
+
+    old_role = target.role.value
+    target.role = payload.role
+    db.commit()
+    db.refresh(target)
+    _log_event(
+        db, "role_changed", user_id, request,
+        detail=f"{old_role} -> {payload.role.value} (target: {target.email})",
+    )
+    return target
