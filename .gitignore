@@ -390,6 +390,11 @@ docs/module6-compatibility.md
 !docs/README.md
 !docs/ARCHITECTURE.md
 !docs/API.md
+!docs/PRESENTATION.md
+!docs/cover.png
+!docs/slides/
+!docs/slides/*.jpg
+!docs/*.pptx
 
 # Frontend dependencies and build artifacts
 node_modules/
