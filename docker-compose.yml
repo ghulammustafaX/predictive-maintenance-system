@@ -49,9 +49,28 @@ services:
         kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic sensor-telemetry --partitions 1 --replication-factor 1;
         kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic preprocessed-telemetry --partitions 1 --replication-factor 1;
         kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic rul-predictions --partitions 1 --replication-factor 1;
-        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic sensor-telemetry-dead-letter --partitions 1 --replication-factor 1 --config retention.ms=604800000
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic sensor-telemetry-dead-letter --partitions 1 --replication-factor 1 --config retention.ms=604800000;
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic bearing-telemetry --partitions 1 --replication-factor 1
     networks:
       - pms-network
+
+  # ─── MQTT BROKER (Mosquitto) ─────────────────────────────────
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: pms-mosquitto
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-data:/mosquitto/data
+      - mosquitto-log:/mosquitto/log
+    networks:
+      - pms-network
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -t '$$SYS/broker/version' -C 1 -W 2 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # ─── INFLUXDB ─────────────────────────────────────────────────
   influxdb:
@@ -189,17 +208,59 @@ services:
     build: ./simulator
     container_name: pms-simulator
     depends_on:
-      - kafka
+      kafka-topic-init:
+        condition: service_completed_successfully
+      mosquitto:
+        condition: service_healthy
     environment:
       KAFKA_BROKER: kafka:9092
       SENSOR_TOPIC: sensor-telemetry
       BEARING_TOPIC: bearing-telemetry
-      DATASET_ID: FD001
+      DATASET_ID: ${SIMULATOR_DATASET_ID:-FD001}
+      SOURCE_SPLIT: ${SIMULATOR_SOURCE_SPLIT:-train}
       STREAM_INTERVAL: ${SIMULATOR_STREAM_INTERVAL:-0.01}
+      REPLAY_MODE: ${SIMULATOR_REPLAY_MODE:-single}
+      MAX_REPLAY_CYCLES: ${SIMULATOR_MAX_REPLAY_CYCLES:-0}
+      REPLAY_PAUSE_SECONDS: ${SIMULATOR_REPLAY_PAUSE_SECONDS:-1.0}
+      PUBLISH_TRANSPORT: ${SIMULATOR_PUBLISH_TRANSPORT:-kafka}
+      MQTT_BROKER: mosquitto
+      MQTT_PORT: 1883
+      MQTT_TOPIC_CMAPSS: pms/telemetry/cmapss
+      MQTT_TOPIC_IMS: pms/telemetry/ims
+      MQTT_QOS: 1
+      RUL_CAP: 125
+      UNRAR_TOOL: unrar
+      CMAPSS_DATA_DIR: /app/data/cmapss
+      IMS_DATA_DIR: /app/data/ims
     volumes:
       - ./simulator/data:/app/data
     networks:
       - pms-network
+    restart: "no"
+
+  # ─── MQTT-TO-KAFKA BRIDGE ───────────────────────────────────
+  mqtt-bridge:
+    build: ./ingestion
+    container_name: pms-mqtt-bridge
+    command: ["python", "src/mqtt_bridge.py"]
+    depends_on:
+      kafka-topic-init:
+        condition: service_completed_successfully
+      mosquitto:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER: kafka:9092
+      SENSOR_TOPIC: sensor-telemetry
+      BEARING_TOPIC: bearing-telemetry
+      DEAD_LETTER_TOPIC: sensor-telemetry-dead-letter
+      MQTT_BROKER: mosquitto
+      MQTT_PORT: 1883
+      MQTT_TOPIC_CMAPSS: pms/telemetry/cmapss
+      MQTT_TOPIC_IMS: pms/telemetry/ims
+      MQTT_QOS: 1
+    networks:
+      - pms-network
+    restart: on-failure
 
 networks:
   pms-network:
@@ -217,3 +278,5 @@ volumes:
     external: true
   influxdb-data:
   postgres-data:
+  mosquitto-data:
+  mosquitto-log:
