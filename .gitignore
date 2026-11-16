@@ -391,12 +391,57 @@ docs/module6-compatibility.md
 !docs/ARCHITECTURE.md
 !docs/API.md
 !docs/PRESENTATION.md
-!docs/cover.png
 !docs/architecture.png
 !docs/repo-tree.png
 !docs/slides/
 !docs/slides/*.jpg
 !docs/*.pptx
+
+# ═══════════════════════════════════════════════════════════════════
+# PERMANENT RULES — keep the repo clean going forward
+# ═══════════════════════════════════════════════════════════════════
+
+# No test files anywhere in the repo
+test_*.py
+*_test.py
+tests/
+backend/tests/
+conftest.py
+**/conftest.py
+*.test.js
+*.spec.js
+*.test.ts
+*.spec.ts
+
+# No ad-hoc / one-off scripts
+read_data.py
+simulator/read_data.py
+build_*.py
+compare_*.py
+ml/build_*.py
+ml/compare_*.py
+
+# No duplicate env examples — only root .env.example is kept
+backend/.env.example
+backend/.env
+
+# No SECURITY.md, cover image, or old docs assets
+SECURITY.md
+docs/cover.png
+
+# No test/verification scripts in scripts/
+scripts/test-*.ps1
+scripts/verify-*.ps1
+scripts/test-*.sh
+scripts/verify-*.sh
+
+# No seed/migration scripts committed (run manually)
+backend/seed_demo_data.py
+
+# No runtime output or log files
+*.err
+*.out
+*.log
 
 # Frontend dependencies and build artifacts
 node_modules/
