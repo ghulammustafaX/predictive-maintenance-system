@@ -158,7 +158,7 @@ The dataset files are not included in this repository. Download them from NASA a
 
 ## Project Status
 
-**Active development**
-Author: Ghulam Mustafa
-Supervisor: Dr. Muhammad Imran
-University; SZABIST University, Islamabad Campus.
+**Active development**<br>
+Author: Ghulam Mustafa<br>
+Supervisor: Dr. Muhammad Imran<br>
+University: SZABIST University, Islamabad Campus.
