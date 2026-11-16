@@ -173,7 +173,16 @@ class MQTTKafkaBridge:
         except ImportError as exc:
             raise RuntimeError("paho-mqtt is required for the MQTT bridge") from exc
 
-        client = mqtt.Client(client_id=MQTT_CLIENT_ID, protocol=mqtt.MQTTv311)
+        # paho-mqtt 2.x changed the Client constructor; handle both versions.
+        try:
+            from paho.mqtt.enums import CallbackAPIVersion
+            client = mqtt.Client(
+                callback_api_version=CallbackAPIVersion.VERSION1,
+                client_id=MQTT_CLIENT_ID,
+            )
+        except ImportError:
+            # paho-mqtt 1.x
+            client = mqtt.Client(client_id=MQTT_CLIENT_ID, protocol=mqtt.MQTTv311)
         client.on_connect = self._on_connect
         client.on_message = self._on_message
         client.on_disconnect = self._on_disconnect

@@ -77,12 +77,11 @@ class KafkaProducerClient:
                     key_serializer=lambda k: k.encode("utf-8") if isinstance(k, str) else k,
                     acks="all",
                     retries=self.retries,
-                    # Idempotent delivery: exactly-once sequence numbers
+                    # Idempotent delivery: exactly-once sequence numbers.
+                    # kafka-python requires max_in_flight=1 for idempotence.
                     enable_idempotence=True,
-                    # Keep in-flight low when idempotent
-                    max_in_flight_requests_per_connection=5,
+                    max_in_flight_requests_per_connection=1,
                     request_timeout_ms=30_000,
-                    compression_type="lz4",
                 )
                 logger.info("Kafka producer connected to %s", self.bootstrap_servers)
                 return
@@ -97,6 +96,11 @@ class KafkaProducerClient:
                     delay = min(self.connect_delay * (2 ** min(attempt, 5)), 30.0)
                     logger.info("Retrying in %.1f s…", delay)
                     time.sleep(delay)
+            except Exception as exc:
+                # Catch configuration errors (KafkaConfigurationError subclasses
+                # Exception but not KafkaError in some kafka-python versions).
+                logger.error("Kafka producer configuration error (not retrying): %s", exc)
+                raise
         raise RuntimeError(
             f"Could not connect to Kafka after {self.connect_attempts} attempts"
         )

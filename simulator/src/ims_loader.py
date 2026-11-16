@@ -182,22 +182,35 @@ def extract_snapshot(
     RuntimeError  : If extraction or parsing fails
     """
     with tempfile.TemporaryDirectory() as tmpdir:
-        result = subprocess.run(
-            [UNRAR_TOOL, "e", str(rar_path), internal_path, tmpdir, "-y", "-inul"],
-            capture_output=True,
-            text=True,
-        )
+        # unrar-free 0.3.x ignores the destination path argument and always
+        # extracts to the current working directory.  We chdir into the temp
+        # directory first, then restore CWD afterwards.
+        orig_cwd = os.getcwd()
+        try:
+            os.chdir(tmpdir)
+            result = subprocess.run(
+                [UNRAR_TOOL, "e", str(rar_path), internal_path, "-y", "-inul"],
+                capture_output=True,
+            )
+        finally:
+            os.chdir(orig_cwd)
+
         if result.returncode != 0:
             raise RuntimeError(
-                f"UnRAR extraction failed (rc={result.returncode}): {result.stderr[:200]}"
+                f"UnRAR extraction failed (rc={result.returncode}): "
+                f"{result.stderr.decode('utf-8', errors='replace')[:200]}"
             )
 
         fname = internal_path.rsplit("/", 1)[-1]
         extracted = Path(tmpdir) / fname
         if not extracted.exists():
-            raise RuntimeError(f"Extracted file not found: {extracted}")
+            raise RuntimeError(
+                f"Extracted file not found: {extracted}. "
+                f"unrar-free may not support this archive format."
+            )
 
         try:
+            # IMS files are tab-separated ASCII with Windows CRLF line endings.
             arr = np.loadtxt(str(extracted), dtype=np.float32, max_rows=chunk_size)
         except Exception as exc:
             raise RuntimeError(

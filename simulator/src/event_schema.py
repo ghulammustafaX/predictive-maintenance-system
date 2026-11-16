@@ -144,14 +144,17 @@ class SequenceTracker:
 
         Returns
         -------
-        (True, 'ok')            — sequence is as expected
-        (False, 'duplicate')    — sequence <= last seen
-        (False, 'gap:N')        — N sequences were skipped
-        (False, 'out_of_order') — sequence arrived late but not 0
+        (True, 'ok')                — sequence is exactly as expected
+        (False, 'duplicate')        — sequence == last seen (exact repeat)
+        (False, 'out_of_order:N')   — sequence arrived below last (N = how far behind)
+        (False, 'gap:N')            — N sequences were skipped above last seen
         """
         key = (run_id, asset_id)
         last = self._counters.get(key, 0)
-        if received_seq <= last:
+        if received_seq < last:
+            behind = last - received_seq
+            return False, f"out_of_order:{behind}"
+        if received_seq == last:
             return False, "duplicate"
         if received_seq == last + 1:
             self._counters[key] = received_seq

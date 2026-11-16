@@ -1,0 +1,136 @@
+# Module 1 Integration Test Environment
+# Isolated project — uses different ports, container names, and project name
+# to guarantee zero interference with the production PMS stack.
+#
+# Usage:
+#   docker compose -p pms-m1-test -f docker-compose.m1-integration-test.yml up -d
+#   # run tests ...
+#   docker compose -p pms-m1-test -f docker-compose.m1-integration-test.yml down
+#   (do NOT use -v — the volumes are anonymous and auto-removed)
+
+name: pms-m1-integration-test
+
+services:
+
+  # ─── ZOOKEEPER ──────────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: pms-m1-test-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "32181:2181"
+    networks:
+      - m1-test-net
+
+  # ─── KAFKA ──────────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: pms-m1-test-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "39092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # Advertise TWO listeners: one for inside Docker, one for the host
+      KAFKA_LISTENERS: PLAINTEXT_INTERNAL://kafka:9092,PLAINTEXT_EXTERNAL://0.0.0.0:39092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT_INTERNAL://kafka:9092,PLAINTEXT_EXTERNAL://localhost:39092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT_INTERNAL:PLAINTEXT,PLAINTEXT_EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - m1-test-net
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list 2>/dev/null || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  # ─── TOPIC INIT ─────────────────────────────────────────────
+  topic-init:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: pms-m1-test-topic-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic sensor-telemetry --partitions 1 --replication-factor 1 && kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic bearing-telemetry --partitions 1 --replication-factor 1 && kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic sensor-telemetry-dead-letter --partitions 1 --replication-factor 1 && kafka-topics --bootstrap-server kafka:9092 --describe && echo "Topics ready"
+    networks:
+      - m1-test-net
+
+  # ─── MOSQUITTO ──────────────────────────────────────────────
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: pms-m1-test-mosquitto
+    ports:
+      - "31883:1883"
+    volumes:
+      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    networks:
+      - m1-test-net
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -t '$$SYS/broker/version' -C 1 -W 2 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ─── MQTT BRIDGE ────────────────────────────────────────────
+  mqtt-bridge:
+    build: ./ingestion
+    container_name: pms-m1-test-mqtt-bridge
+    command: ["python", "src/mqtt_bridge.py"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+      topic-init:
+        condition: service_completed_successfully
+    environment:
+      KAFKA_BROKER: kafka:9092
+      SENSOR_TOPIC: sensor-telemetry
+      BEARING_TOPIC: bearing-telemetry
+      DEAD_LETTER_TOPIC: sensor-telemetry-dead-letter
+      MQTT_BROKER: mosquitto
+      MQTT_PORT: 1883
+      MQTT_TOPIC_CMAPSS: pms/telemetry/cmapss
+      MQTT_TOPIC_IMS: pms/telemetry/ims
+      MQTT_QOS: 1
+    networks:
+      - m1-test-net
+    restart: on-failure
+
+  # ─── SIMULATOR (single replay, tiny subset for speed) ───────
+  simulator:
+    build: ./simulator
+    container_name: pms-m1-test-simulator
+    depends_on:
+      kafka:
+        condition: service_healthy
+      topic-init:
+        condition: service_completed_successfully
+    environment:
+      KAFKA_BROKER: kafka:9092
+      SENSOR_TOPIC: sensor-telemetry
+      DATASET_ID: FD001
+      SOURCE_SPLIT: train
+      STREAM_INTERVAL: "0.0"
+      REPLAY_MODE: single
+      PUBLISH_TRANSPORT: kafka
+      CMAPSS_DATA_DIR: /app/data/cmapss
+      UNRAR_TOOL: /usr/bin/unrar
+    volumes:
+      - ./simulator/data:/app/data
+    networks:
+      - m1-test-net
+    restart: "no"
+
+networks:
+  m1-test-net:
+    driver: bridge

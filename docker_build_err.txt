@@ -1,141 +1,0 @@
-#0 building with "desktop-linux" instance using docker driver
-
-#1 [internal] load build definition from Dockerfile
-#1 transferring dockerfile: 748B done
-#1 DONE 0.1s
-
-#2 [internal] load metadata for docker.io/library/python:3.11-slim
-#2 DONE 0.0s
-
-#3 [internal] load .dockerignore
-#3 transferring context:
-#3 transferring context: 2B done
-#3 DONE 0.1s
-
-#4 [1/6] FROM docker.io/library/python:3.11-slim@sha256:a3ab0b966bc4e91546a033e22093cb840908979487a9fc0e6e38295747e49ac0
-#4 resolve docker.io/library/python:3.11-slim@sha256:a3ab0b966bc4e91546a033e22093cb840908979487a9fc0e6e38295747e49ac0 0.0s done
-#4 DONE 0.1s
-
-#5 [2/6] WORKDIR /app
-#5 CACHED
-
-#6 [3/6] RUN apt-get update     && apt-get install -y --no-install-recommends unrar-free     && rm -rf /var/lib/apt/lists/*
-#6 1.597 Get:1 http://deb.debian.org/debian trixie InRelease [140 kB]
-#6 2.104 Get:2 http://deb.debian.org/debian trixie-updates InRelease [47.3 kB]
-#6 2.301 Get:3 http://deb.debian.org/debian-security trixie-security InRelease [43.4 kB]
-#6 2.490 Get:4 http://deb.debian.org/debian trixie/main amd64 Packages [9678 kB]
-#6 3.735 Get:5 http://deb.debian.org/debian trixie-updates/main amd64 Packages [1108 B]
-#6 3.906 Get:6 http://deb.debian.org/debian-security trixie-security/main amd64 Packages [305 kB]
-#6 4.733 Fetched 10.2 MB in 4s (2818 kB/s)
-#6 4.733 Reading package lists...
-#6 5.521 Reading package lists...
-#6 6.256 Building dependency tree...
-#6 6.426 Reading state information...
-#6 6.779 The following additional packages will be installed:
-#6 6.781   libarchive13t64 libxml2
-#6 6.785 Suggested packages:
-#6 6.785   lrzip pike8.0
-#6 6.848 The following NEW packages will be installed:
-#6 6.849   libarchive13t64 libxml2 unrar-free
-#6 6.963 0 upgraded, 3 newly installed, 0 to remove and 29 not upgraded.
-#6 6.963 Need to get 1067 kB of archives.
-#6 6.963 After this operation, 2927 kB of additional disk space will be used.
-#6 6.963 Get:1 http://deb.debian.org/debian trixie/main amd64 libxml2 amd64 2.12.7+dfsg+really2.9.14-2.1+deb13u3 [700 kB]
-#6 7.164 Get:2 http://deb.debian.org/debian trixie/main amd64 libarchive13t64 amd64 3.7.4-4+deb13u1 [350 kB]
-#6 7.379 Get:3 http://deb.debian.org/debian trixie/main amd64 unrar-free amd64 1:0.3.1-1 [16.6 kB]
-#6 7.639 debconf: unable to initialize frontend: Dialog
-#6 7.639 debconf: (TERM is not set, so the dialog frontend is not usable.)
-#6 7.639 debconf: falling back to frontend: Readline
-#6 7.640 debconf: unable to initialize frontend: Readline
-#6 7.640 debconf: (Can't locate Term/ReadLine.pm in @INC (you may need to install the Term::ReadLine module) (@INC entries checked: /etc/perl /usr/local/lib/x86_64-linux-gnu/perl/5.40.1 /usr/local/share/perl/5.40.1 /usr/lib/x86_64-linux-gnu/perl5/5.40 /usr/share/perl5 /usr/lib/x86_64-linux-gnu/perl-base /usr/lib/x86_64-linux-gnu/perl/5.40 /usr/share/perl/5.40 /usr/local/lib/site_perl) at /usr/share/perl5/Debconf/FrontEnd/Readline.pm line 8, <STDIN> line 3.)
-#6 7.640 debconf: falling back to frontend: Teletype
-#6 7.647 debconf: unable to initialize frontend: Teletype
-#6 7.647 debconf: (This frontend requires a controlling tty.)
-#6 7.647 debconf: falling back to frontend: Noninteractive
-#6 8.966 Fetched 1067 kB in 1s (2080 kB/s)
-#6 9.020 Selecting previously unselected package libxml2:amd64.
-#6 9.020 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 5645 files and directories currently installed.)
-#6 9.063 Preparing to unpack .../libxml2_2.12.7+dfsg+really2.9.14-2.1+deb13u3_amd64.deb ...
-#6 9.076 Unpacking libxml2:amd64 (2.12.7+dfsg+really2.9.14-2.1+deb13u3) ...
-#6 9.164 Selecting previously unselected package libarchive13t64:amd64.
-#6 9.165 Preparing to unpack .../libarchive13t64_3.7.4-4+deb13u1_amd64.deb ...
-#6 9.173 Unpacking libarchive13t64:amd64 (3.7.4-4+deb13u1) ...
-#6 9.255 Selecting previously unselected package unrar-free.
-#6 9.257 Preparing to unpack .../unrar-free_1%3a0.3.1-1_amd64.deb ...
-#6 9.271 Unpacking unrar-free (1:0.3.1-1) ...
-#6 9.386 Setting up libxml2:amd64 (2.12.7+dfsg+really2.9.14-2.1+deb13u3) ...
-#6 9.411 Setting up libarchive13t64:amd64 (3.7.4-4+deb13u1) ...
-#6 9.432 Setting up unrar-free (1:0.3.1-1) ...
-#6 9.459 update-alternatives: using /usr/bin/unrar-free to provide /usr/bin/unrar (unrar) in auto mode
-#6 9.460 update-alternatives: warning: skip creation of /usr/share/man/man1/unrar.1.gz because associated file /usr/share/man/man1/unrar-free.1.gz (of link group unrar) doesn't exist
-#6 9.474 Processing triggers for libc-bin (2.41-12+deb13u3) ...
-#6 DONE 9.7s
-
-#7 [internal] load build context
-#7 transferring context: 145.33kB 0.0s done
-#7 DONE 0.1s
-
-#8 [4/6] COPY requirements.txt .
-#8 DONE 0.1s
-
-#9 [5/6] RUN pip install --no-cache-dir -r requirements.txt
-#9 3.359 Collecting kafka-python>=2.0.2 (from -r requirements.txt (line 1))
-#9 3.936   Downloading kafka_python-3.0.13-py3-none-any.whl.metadata (11 kB)
-#9 4.743 Collecting pandas>=2.2.3 (from -r requirements.txt (line 2))
-#9 4.922   Downloading pandas-3.1.1-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl.metadata (16 kB)
-#9 5.998 Collecting numpy>=2.1.0 (from -r requirements.txt (line 3))
-#9 6.180   Downloading numpy-2.4.6-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl.metadata (6.6 kB)
-#9 6.425 Collecting python-dotenv>=1.0.0 (from -r requirements.txt (line 4))
-#9 6.610   Downloading python_dotenv-1.2.4-py3-none-any.whl.metadata (29 kB)
-#9 6.880 Collecting paho-mqtt>=1.6.1 (from -r requirements.txt (line 5))
-#9 7.061   Downloading paho_mqtt-2.2.0-py3-none-any.whl.metadata (24 kB)
-#9 7.282 Collecting rarfile>=4.0 (from -r requirements.txt (line 6))
-#9 7.461   Downloading rarfile-4.5-py3-none-any.whl.metadata (4.6 kB)
-#9 7.835 Collecting scipy>=1.13.0 (from -r requirements.txt (line 7))
-#9 8.013   Downloading scipy-1.17.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl.metadata (62 kB)
-#9 8.096      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 62.1/62.1 kB 815.3 kB/s eta 0:00:00
-#9 8.348 Collecting python-dateutil>=2.9.0 (from pandas>=2.2.3->-r requirements.txt (line 2))
-#9 8.528   Downloading python_dateutil-4.0.0-py3-none-any.whl.metadata (7.3 kB)
-#9 8.782 Collecting tzdata (from python-dateutil>=2.9.0->pandas>=2.2.3->-r requirements.txt (line 2))
-#9 8.957   Downloading tzdata-2026.6-py2.py3-none-any.whl.metadata (1.4 kB)
-#9 9.139 Downloading kafka_python-3.0.13-py3-none-any.whl (614 kB)
-#9 9.715    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 614.3/614.3 kB 1.1 MB/s eta 0:00:00
-#9 9.892 Downloading pandas-3.1.1-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl (12.4 MB)
-#9 11.71    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 12.4/12.4 MB 7.2 MB/s eta 0:00:00
-#9 11.89 Downloading numpy-2.4.6-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (16.9 MB)
-#9 13.31    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 16.9/16.9 MB 12.4 MB/s eta 0:00:00
-#9 13.49 Downloading python_dotenv-1.2.4-py3-none-any.whl (23 kB)
-#9 13.69 Downloading paho_mqtt-2.2.0-py3-none-any.whl (77 kB)
-#9 13.70    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 77.2/77.2 kB 7.0 MB/s eta 0:00:00
-#9 13.89 Downloading rarfile-4.5-py3-none-any.whl (30 kB)
-#9 14.08 Downloading scipy-1.17.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (35.3 MB)
-#9 16.51    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 35.3/35.3 MB 14.4 MB/s eta 0:00:00
-#9 16.70 Downloading python_dateutil-4.0.0-py3-none-any.whl (92 kB)
-#9 16.75    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 92.9/92.9 kB 6.4 MB/s eta 0:00:00
-#9 16.93 Downloading tzdata-2026.6-py2.py3-none-any.whl (348 kB)
-#9 17.03    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 348.2/348.2 kB 4.4 MB/s eta 0:00:00
-#9 17.44 Installing collected packages: tzdata, rarfile, python-dotenv, paho-mqtt, numpy, kafka-python, scipy, python-dateutil, pandas
-#9 34.48 Successfully installed kafka-python-3.0.13 numpy-2.4.6 paho-mqtt-2.2.0 pandas-3.1.1 python-dateutil-4.0.0 python-dotenv-1.2.4 rarfile-4.5 scipy-1.17.1 tzdata-2026.6
-#9 34.48 WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv
-#9 35.19 
-#9 35.19 [notice] A new release of pip is available: 24.0 -> 26.3
-#9 35.19 [notice] To update, run: pip install --upgrade pip
-#9 DONE 35.8s
-
-#10 [6/6] COPY src/ ./src/
-#10 DONE 0.2s
-
-#11 exporting to image
-#11 exporting layers
-#11 exporting layers 16.6s done
-#11 exporting manifest sha256:75c7eaff7e793f8ccb8628479f4c5a39edebb9c553edb6dbc9d2b2cc454178e3 0.0s done
-#11 exporting config sha256:5f60da0d78d8e8f221b553de45c086c8f1ac5bf176d8a07243f745dba45d40f8 0.1s done
-#11 exporting attestation manifest sha256:c96e2f8109b848159d572cef7029d199c47418412ddea783e448d1da520f30c8 0.1s done
-#11 exporting manifest list sha256:c4ac266a696c690398126f05b668498cd456738648079737d2f8ddedc0ba7ce8
-#11 exporting manifest list sha256:c4ac266a696c690398126f05b668498cd456738648079737d2f8ddedc0ba7ce8 0.1s done
-#11 naming to docker.io/library/pms-simulator-v2-test:latest 0.0s done
-#11 unpacking to docker.io/library/pms-simulator-v2-test:latest
-#11 unpacking to docker.io/library/pms-simulator-v2-test:latest 11.2s done
-#11 DONE 28.3s
-
-View build details: docker-desktop://dashboard/build/desktop-linux/desktop-linux/7bwa95jrb9hq5kc7y3bjmyck6
