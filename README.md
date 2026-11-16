@@ -1,10 +1,5 @@
 <div align="center">
-  <img src="docs/cover.png" alt="Predictive Maintenance System" width="100%">
-</div>
-
-<div align="center">
-  <strong>An AI-powered platform for monitoring equipment health, predicting failures, and planning maintenance.</strong><br>
-  Built on the NASA C-MAPSS turbofan engine dataset | Kafka | InfluxDB | PyTorch LSTM | FastAPI | Docker
+  <img src="docs/slides/slide-01.jpg" alt="Predictive Maintenance System" width="100%">
 </div>
 
 <br>
@@ -18,6 +13,8 @@
 ---
 
 ## What it does
+
+A real-time predictive maintenance platform built on the NASA C-MAPSS turbofan engine dataset. The system streams sensor telemetry through Apache Kafka, stores it in InfluxDB, runs an LSTM model to predict Remaining Useful Life (RUL), and surfaces everything through a live web dashboard with authentication and role-based access control.
 
 Industrial equipment degrades over time. This system monitors 100 simulated turbofan engines continuously and predicts how many operational cycles remain before each engine is likely to fail. When an engine approaches its end of life, the system raises alerts so maintenance can be scheduled before failure occurs.
 
@@ -37,43 +34,9 @@ The pipeline runs entirely in Docker and processes data end-to-end: a simulator 
 
 ## Repository Structure
 
-```
-predictive-maintenance-system/
-|
-+-- backend/
-|   +-- app/
-|   |   +-- routers/
-|   |   |   +-- auth.py              - Authentication & token management
-|   |   |   +-- fleet.py             - Engine fleet status & telemetry
-|   |   |   +-- alerts.py            - Alert lifecycle management
-|   |   |   +-- anomalies.py         - Anomaly detection & history
-|   |   |   \-- rul.py               - RUL prediction queries
-|   |   +-- models.py                - SQLAlchemy ORM models
-|   |   +-- schemas.py               - Pydantic request/response schemas
-|   |   +-- security.py              - JWT, bcrypt, token utilities
-|   |   +-- rbac.py                  - Role-based access control
-|   |   +-- anomaly_detector.py      - Z-score & threshold detection logic
-|   |   \-- database.py              - DB session and connection setup
-|   +-- main.py                      - App entry point, middleware, router registration
-|   +-- Dockerfile
-|   \-- requirements.txt
-|
-+-- frontend/
-|   +-- authentication/              - Login, register, password reset, Google OAuth
-|   \-- dashboard/                   - Live operations, alerts, anomalies, users
-|
-+-- ml/
-|   +-- prediction/                  - LSTM inference service (Kafka consumer + REST)
-|   +-- streaming/                   - Real-time preprocessing service
-|   +-- data/                        - Preprocessing pipeline scripts
-|   \-- models/                      - Saved model checkpoints (not in git)
-|
-+-- simulator/                       - Replays NASA C-MAPSS dataset into Kafka
-+-- ingestion/                       - Kafka to InfluxDB consumer
-+-- tests/                           - Integration and unit tests
-+-- docs/                            - Architecture and API documentation
-\-- docker-compose.yml               - Full stack definition
-```
+<div align="center">
+  <img src="docs/repo-tree.png" alt="Repository Structure" width="100%">
+</div>
 
 ---
 
