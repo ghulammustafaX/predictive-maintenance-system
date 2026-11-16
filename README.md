@@ -10,13 +10,9 @@
 <br>
 
 <div align="center">
-  <a href="https://youtu.be/4_dOkwqwShI">
-    <img src="https://img.youtube.com/vi/4_dOkwqwShI/maxresdefault.jpg" alt="Watch the PMS demo on YouTube" width="80%">
-  </a>
-  <br><br>
-  <a href="https://youtu.be/4_dOkwqwShI"><strong>▶&nbsp; Watch the demo video</strong></a>
+  <a href="https://youtu.be/4_dOkwqwShI">&#9654;&nbsp; Watch the demo video</a>
   &nbsp;&nbsp;·&nbsp;&nbsp;
-  <a href="docs/Predictive_Maintenance_System.pptx"><strong>📊&nbsp; Download the presentation</strong></a>
+  <a href="https://docs.google.com/presentation/d/1jacaOMDywyE-yN3MrrPFCvO5YsLUJAMa/edit?usp=sharing&ouid=114949035556935492523&rtpof=true&sd=true">&#128202;&nbsp; Download the presentation</a>
 </div>
 
 ---
@@ -122,7 +118,7 @@ predictive-maintenance-system/
 
 ## Presentation
 
-The slides below summarise the full system design. Download the [full PowerPoint](docs/Predictive_Maintenance_System.pptx) for presenter notes.
+The slides below summarise the full system design. Open the [full presentation](https://docs.google.com/presentation/d/1jacaOMDywyE-yN3MrrPFCvO5YsLUJAMa/edit?usp=sharing&ouid=114949035556935492523&rtpof=true&sd=true) for presenter notes.
 
 | | |
 |---|---|
@@ -151,7 +147,6 @@ The slides below summarise the full system design. Download the [full PowerPoint
 |---|---|
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Component breakdown, data flow, Kafka topic map, design decisions |
 | [`docs/API.md`](docs/API.md) | Full REST API reference with request/response shapes |
-| [`docs/Predictive_Maintenance_System.pptx`](docs/Predictive_Maintenance_System.pptx) | Full presentation with presenter notes |
 
 ---
 
