@@ -1,9 +1,6 @@
 # Predictive Maintenance System (PMS)
 
-> A Final Year Project at SZABIST University, Islamabad Campus.
-> **Supervisor:** Dr. Muhammad Imran | **Author:** Ghulam Mustafa
-
-Industrial equipment fails without warning — costing manufacturers billions every year in emergency repairs and unplanned downtime. This project builds a complete, end-to-end predictive maintenance platform that continuously monitors 100 simulated turbofan engines, learns from their sensor data, and predicts how many cycles remain before each engine needs servicing.
+Industrial equipment fails without warning - costing manufacturers billions every year in emergency repairs and unplanned downtime. This project builds a complete, end-to-end predictive maintenance platform that continuously monitors 100 simulated turbofan engines, learns from their sensor data, and predicts how many cycles remain before each engine needs servicing.
 
 The system is fully open-source, runs locally with a single Docker command, and is designed so that swapping the simulated data source for real IoT sensors requires zero changes to any other part of the stack.
 
@@ -27,16 +24,16 @@ Traditional maintenance is either **reactive** (fix it after it breaks — expen
 
 The system is built as a streaming data pipeline with four layers:
 
-**Layer 1 — Data Pipeline**
+**Layer 1: Data Pipeline**
 A Python simulator replays the NASA C-MAPSS turbofan dataset into Apache Kafka at ~100 messages per second. A separate consumer reads from Kafka and writes every raw sensor reading into InfluxDB, a time-series database optimised for high-frequency append-only writes.
 
-**Layer 2 — AI Core**
+**Layer 2: AI Core**
 A preprocessing service reads the same Kafka stream, applies Min-Max normalisation and EWMA noise reduction (using scalers fitted on training data, never on live data), and assembles 30-cycle sliding windows. These windows are fed into a stacked PyTorch LSTM model, which outputs an RUL prediction for each engine. Predictions are written back to InfluxDB.
 
-**Layer 3 — Backend and Security**
+**Layer 3: Backend and Security**
 A FastAPI application serves both the telemetry query layer (reading from InfluxDB) and the application layer (users, alerts, anomaly records stored in PostgreSQL). Every endpoint is protected by JWT authentication with four roles: Admin, Maintenance Engineer, Floor Operator, and Viewer. All state changes are written to an immutable audit log.
 
-**Layer 4 — Dashboard**
+**Layer 4: Dashboard**
 A browser-based dashboard polls the backend every 5 seconds and shows the live status of all 100 engines, per-engine sensor charts, RUL trend history, an anomaly detection view, and an alert centre where engineers can acknowledge and resolve issues.
 
 ---
@@ -145,15 +142,23 @@ The dataset files are not included in this repository. Download them from NASA a
 
 ## Project Status
 
-**Active development** — Final Year Project, SZABIST University, Islamabad Campus.
-Supervisor: Dr. Muhammad Imran | Author: Ghulam Mustafa
-
 **Completed**
+
 - Layer 1: Kafka ingestion pipeline and InfluxDB time-series storage
 - Layer 2: Real-time preprocessing, LSTM model training and streaming inference
 - Layer 3: FastAPI backend with JWT authentication, RBAC, anomaly detection, and alert lifecycle
 - Layer 4: Live dashboard, fleet view, alert centre, anomaly page, and user management
 
 **In progress**
+
 - Automated alert triggering from the prediction pipeline
 - Advanced analytics and reporting page
+
+---
+
+## Project Status
+
+**Active development**
+Author: Ghulam Mustafa
+Supervisor: Dr. Muhammad Imran
+University; SZABIST University, Islamabad Campus.
