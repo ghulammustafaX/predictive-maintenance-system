@@ -1,13 +1,15 @@
 <div align="center">
-  <img src="docs/slides/slide-01.jpg" alt="Predictive Maintenance System" width="100%">
-</div>
 
-<br>
+# Predictive Maintenance System
 
-<div align="center">
-  <a href="https://youtu.be/4_dOkwqwShI">&#9654; Watch the demo video</a>
-  &nbsp;&nbsp;|&nbsp;&nbsp;
-  <a href="https://docs.google.com/presentation/d/1jacaOMDywyE-yN3MrrPFCvO5YsLUJAMa/edit?usp=sharing&ouid=114949035556935492523&rtpof=true&sd=true">&#128202; Download the presentation</a>
+**A real-time predictive maintenance platform built on the NASA C-MAPSS turbofan engine dataset.**
+
+Streams sensor telemetry through Apache Kafka, stores it in InfluxDB, runs a PyTorch LSTM model to predict Remaining Useful Life (RUL), and surfaces everything through a live web dashboard with authentication and role-based access control.
+
+<a href="https://youtu.be/4_dOkwqwShI">&#9654; Watch the demo video</a>
+&nbsp;&nbsp;|&nbsp;&nbsp;
+<a href="https://docs.google.com/presentation/d/1jacaOMDywyE-yN3MrrPFCvO5YsLUJAMa/edit?usp=sharing&ouid=114949035556935492523&rtpof=true&sd=true">&#128202; Download the presentation</a>
+
 </div>
 
 ---
@@ -121,8 +123,8 @@ This project uses the [NASA C-MAPSS Turbofan Engine Degradation Simulation datas
 
 ## Project Status
 
-Active development - Final Year Project, University of Engineering and Technology.
-Supervisor: Mr. Muhammad Usman Ali | Author: Ghulam Mustafa
+Active development - Final Year Project, SZABIST University, Islamabad Campus.
+Supervisor: Dr. Muhammad Imran | Author: Ghulam Mustafa
 
 **Completed**
 - Kafka ingestion pipeline and InfluxDB time-series storage (Layer 1)
