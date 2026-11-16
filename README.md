@@ -1,26 +1,43 @@
+# Predictive Maintenance System (PMS)
+
+> A Final Year Project at SZABIST University, Islamabad Campus.
+> **Supervisor:** Dr. Muhammad Imran | **Author:** Ghulam Mustafa
+
+Industrial equipment fails without warning — costing manufacturers billions every year in emergency repairs and unplanned downtime. This project builds a complete, end-to-end predictive maintenance platform that continuously monitors 100 simulated turbofan engines, learns from their sensor data, and predicts how many cycles remain before each engine needs servicing.
+
+The system is fully open-source, runs locally with a single Docker command, and is designed so that swapping the simulated data source for real IoT sensors requires zero changes to any other part of the stack.
+
 <div align="center">
-
-# Predictive Maintenance System
-
-**A real-time predictive maintenance platform built on the NASA C-MAPSS turbofan engine dataset.**
-
-Streams sensor telemetry through Apache Kafka, stores it in InfluxDB, runs a PyTorch LSTM model to predict Remaining Useful Life (RUL), and surfaces everything through a live web dashboard with authentication and role-based access control.
-
-<a href="https://youtu.be/4_dOkwqwShI">&#9654; Watch the demo video</a>
-&nbsp;&nbsp;|&nbsp;&nbsp;
-<a href="https://docs.google.com/presentation/d/1jacaOMDywyE-yN3MrrPFCvO5YsLUJAMa/edit?usp=sharing&ouid=114949035556935492523&rtpof=true&sd=true">&#128202; Download the presentation</a>
-
+  <a href="https://youtu.be/4_dOkwqwShI">&#9654; Watch the demo video</a>
+  &nbsp;&nbsp;|&nbsp;&nbsp;
+  <a href="https://docs.google.com/presentation/d/1jacaOMDywyE-yN3MrrPFCvO5YsLUJAMa/edit?usp=sharing&ouid=114949035556935492523&rtpof=true&sd=true">&#128202; View the presentation</a>
 </div>
 
 ---
 
-## What it does
+## The Problem
 
-A real-time predictive maintenance platform built on the NASA C-MAPSS turbofan engine dataset. The system streams sensor telemetry through Apache Kafka, stores it in InfluxDB, runs an LSTM model to predict Remaining Useful Life (RUL), and surfaces everything through a live web dashboard with authentication and role-based access control.
+Traditional maintenance is either **reactive** (fix it after it breaks — expensive and dangerous) or **preventative** (replace parts on a schedule — wastes resources on healthy equipment). Neither approach uses the actual condition of the machine.
 
-Industrial equipment degrades over time. This system monitors 100 simulated turbofan engines continuously and predicts how many operational cycles remain before each engine is likely to fail. When an engine approaches its end of life, the system raises alerts so maintenance can be scheduled before failure occurs.
+**Predictive maintenance** solves this by reading real sensor data continuously and calculating a **Remaining Useful Life (RUL)** — a concrete number of operational cycles left before the engine is likely to fail. Maintenance is then scheduled exactly when it is needed, not before and not after.
 
-The pipeline runs entirely in Docker and processes data end-to-end: a simulator replays real NASA sensor recordings into Kafka, a consumer writes them to InfluxDB, a preprocessing service normalises the stream, and an LSTM prediction service publishes RUL estimates back to Kafka and InfluxDB. The dashboard reads from InfluxDB and PostgreSQL in real time.
+---
+
+## How It Works
+
+The system is built as a streaming data pipeline with four layers:
+
+**Layer 1 — Data Pipeline**
+A Python simulator replays the NASA C-MAPSS turbofan dataset into Apache Kafka at ~100 messages per second. A separate consumer reads from Kafka and writes every raw sensor reading into InfluxDB, a time-series database optimised for high-frequency append-only writes.
+
+**Layer 2 — AI Core**
+A preprocessing service reads the same Kafka stream, applies Min-Max normalisation and EWMA noise reduction (using scalers fitted on training data, never on live data), and assembles 30-cycle sliding windows. These windows are fed into a stacked PyTorch LSTM model, which outputs an RUL prediction for each engine. Predictions are written back to InfluxDB.
+
+**Layer 3 — Backend and Security**
+A FastAPI application serves both the telemetry query layer (reading from InfluxDB) and the application layer (users, alerts, anomaly records stored in PostgreSQL). Every endpoint is protected by JWT authentication with four roles: Admin, Maintenance Engineer, Floor Operator, and Viewer. All state changes are written to an immutable audit log.
+
+**Layer 4 — Dashboard**
+A browser-based dashboard polls the backend every 5 seconds and shows the live status of all 100 engines, per-engine sensor charts, RUL trend history, an anomaly detection view, and an alert centre where engineers can acknowledge and resolve issues.
 
 ---
 
@@ -30,7 +47,7 @@ The pipeline runs entirely in Docker and processes data end-to-end: a simulator 
   <img src="docs/architecture.png" alt="PMS System Architecture" width="90%">
 </div>
 
-> See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a full component breakdown, Kafka topic map, and design decisions.
+> Full component breakdown and design decisions: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ---
 
@@ -44,95 +61,99 @@ The pipeline runs entirely in Docker and processes data end-to-end: a simulator 
 
 ## Technology Stack
 
-| Layer | Technology |
-|---|---|
-| Data source | NASA C-MAPSS turbofan dataset (FD001-FD004) |
-| Message broker | Apache Kafka 3.4 + Zookeeper |
-| Time-series store | InfluxDB 2.7 (Flux query language) |
-| Relational store | PostgreSQL 16 |
-| ML framework | PyTorch 2.x - stacked LSTM sequence model |
-| Backend API | FastAPI (Python 3.11), SQLAlchemy 2.0 |
-| Authentication | JWT (HS256), bcrypt (cost 12), Google OAuth 2.0 |
-| Frontend | Vanilla JavaScript, Chart.js, CSS3 |
-| Containerisation | Docker, Docker Compose (9 services) |
+| Layer | Technology | Why |
+|---|---|---|
+| Data source | NASA C-MAPSS dataset (FD001-FD004) | Publicly available benchmark for turbofan degradation |
+| Message broker | Apache Kafka 3.4 + Zookeeper | Decouples producers from consumers; buffers backpressure |
+| Time-series store | InfluxDB 2.7 | Optimised for high-frequency sensor writes and range queries |
+| Relational store | PostgreSQL 16 | Structured application data: users, alerts, audit logs |
+| ML framework | PyTorch 2.x — stacked LSTM | Sequence model well-suited to multi-variate time-series degradation |
+| Backend API | FastAPI (Python 3.11), SQLAlchemy 2.0 | Async-ready, auto-documented REST API |
+| Authentication | JWT + bcrypt (cost 12) + Google OAuth 2.0 | Stateless tokens with secure password hashing |
+| Frontend | Vanilla JavaScript, Chart.js, CSS3 | No build toolchain; straightforward to read and modify |
+| Containerisation | Docker, Docker Compose (9 services) | One command to run the full stack on any OS |
 
 ---
 
 ## Key Features
 
-**Data pipeline**
-- Simulator streams all four C-MAPSS sub-datasets (FD001-FD004) at configurable speed (~100 rows/s)
-- Preprocessing applies Min-Max normalisation + EWMA noise reduction without data leakage
-- LSTM model runs inference on 30-cycle sliding windows and publishes RUL estimates back through the pipeline
+**Real-time data pipeline**
+- Kafka topics decouple simulation, preprocessing, prediction, and storage — each service can be restarted independently
+- Preprocessing scalers are fixed at training time, preventing any data leakage from live readings into the model
+- Dead-letter topic captures any unprocessable messages for inspection without data loss
 
-**Dashboard**
-- Live fleet view - all 100 engines with health status, latest cycle, and data freshness
-- Per-engine sensor telemetry chart across 21 channels
-- RUL trend history per run with safety threshold indicator
-- Z-score and threshold-based anomaly detection across all sensor channels
-- Alert centre with open to acknowledged to resolved lifecycle and full audit trail
+**Machine learning**
+- 30-cycle sliding window input feeds a two-layer LSTM trained on all four C-MAPSS sub-datasets
+- Piece-wise linear RUL targets — flat region for healthy engines, linear decrease as degradation begins — matches real degradation behaviour
+- Validated against NASA test sets using RMSE and MAE
 
-**Authentication and access control**
-- Email/password registration with verification flow
-- Google OAuth with automatic account linking
-- Four roles: Admin, Maintenance Engineer, Floor Operator, Viewer
-- JWT access tokens (30 min) + refresh tokens (7 days) with JTI revocation blacklist
-- Immutable audit log on every auth event and alert state change
+**Live dashboard**
+- Fleet overview: 100 engines ranked by health status (healthy / warning / offline)
+- Per-engine telemetry chart: select any of 21 sensor channels across any time range
+- RUL panel: latest prediction, cycle, run ID, model version, and freshness
+- Anomaly detection: Z-score and threshold methods run on demand against stored telemetry
+- Alert centre: open / acknowledged / resolved lifecycle with full audit trail per alert
+
+**Security and access control**
+- Four roles with strict endpoint guards: Admin, Maintenance Engineer, Floor Operator, Viewer
+- JWT access tokens expire in 30 minutes; refresh tokens in 7 days; revoked JTIs are blacklisted on logout
+- Google OAuth with automatic account linking if the email already exists
+- Every login, logout, role change, and alert state change is recorded in a tamper-evident audit log
 
 ---
 
 ## Presentation
 
-The slides below summarise the full system design. Open the [full presentation](https://docs.google.com/presentation/d/1jacaOMDywyE-yN3MrrPFCvO5YsLUJAMa/edit?usp=sharing&ouid=114949035556935492523&rtpof=true&sd=true) to view with presenter notes.
+The slides below summarise the full system. Open the [full presentation](https://docs.google.com/presentation/d/1jacaOMDywyE-yN3MrrPFCvO5YsLUJAMa/edit?usp=sharing&ouid=114949035556935492523&rtpof=true&sd=true) for presenter notes.
 
 | | |
 |---|---|
 | ![Slide 1](docs/slides/slide-01.jpg) | ![Slide 2](docs/slides/slide-02.jpg) |
-| **Title** - Project overview and four-layer architecture | **Problem** - The $50B cost of reactive and preventative maintenance vs. the predictive solution |
+| **Title** — Project overview and four-layer architecture | **Problem** — The $50B cost of reactive and preventative maintenance vs. the predictive solution |
 | ![Slide 3](docs/slides/slide-03.jpg) | ![Slide 4](docs/slides/slide-04.jpg) |
-| **Differentiation** - PMS vs. commercial black-box systems (IBM Maximo, C3.ai) | **12-Module Architecture** - Four layers from data acquisition to the application UI |
+| **Differentiation** — PMS vs. commercial black-box systems (IBM Maximo, C3.ai) | **12-Module Architecture** — Four layers from data acquisition to the application UI |
 | ![Slide 5](docs/slides/slide-05.jpg) | ![Slide 6](docs/slides/slide-06.jpg) |
-| **Layer 1** - IoT simulation, Apache Kafka stream ingestion, InfluxDB time-series storage | **Layer 2** - Min-Max normalisation, EWMA noise reduction, feature engineering, PyTorch LSTM inference |
+| **Layer 1** — IoT simulation, Kafka ingestion, InfluxDB time-series storage | **Layer 2** — Normalisation, noise reduction, feature engineering, LSTM inference |
 | ![Slide 7](docs/slides/slide-07.jpg) | ![Slide 8](docs/slides/slide-08.jpg) |
-| **LSTM Mechanics** - 30-cycle sliding window, RUL curve, 30-cycle safety threshold, RMSE/MAE validation | **Layer 3** - Z-score anomaly detection, JWT + bcrypt RBAC, automated alerting engine |
+| **LSTM Mechanics** — 30-cycle window, RUL curve, 30-cycle safety threshold | **Layer 3** — Anomaly detection, JWT + RBAC, alerting engine |
 | ![Slide 9](docs/slides/slide-09.jpg) | ![Slide 10](docs/slides/slide-10.jpg) |
-| **Layer 4** - Live telemetry dashboard, RUL health gauges, maintenance scheduling | **Alert Lifecycle** - Trigger to Alert to Acknowledge to Work Order to Resolution |
+| **Layer 4** — Live dashboard, RUL gauges, maintenance scheduling | **Alert lifecycle** — Trigger to alert to acknowledge to work order to resolution |
 | ![Slide 11](docs/slides/slide-11.jpg) | ![Slide 12](docs/slides/slide-12.jpg) |
-| **End-to-End Schematic** - Full pipeline with NFR-01 (< 2s latency) and NFR-02 (100 concurrent engines) | **Agile Execution** - Four-phase critical path: Pipeline to AI Core to Backend to Application |
+| **End-to-end schematic** — NFR-01 (< 2 s latency), NFR-02 (100 concurrent engines) | **Agile execution** — Four-phase critical path |
 | ![Slide 13](docs/slides/slide-13.jpg) | ![Slide 14](docs/slides/slide-14.jpg) |
-| **Risk Management** - ML overfitting, streaming data loss, and deployment inconsistency mitigations | **Future State** - Replacing Python simulator with real MQTT IoT sensors with zero backend changes |
+| **Risk management** — Overfitting, data loss, deployment inconsistency | **Future state** — Replace simulator with real MQTT IoT sensors, zero backend changes |
 | ![Slide 15](docs/slides/slide-15.jpg) | |
-| **Conclusion** - Transparent, accessible, and intelligent. Predictive Maintenance, engineered for clarity. | |
+| **Conclusion** — Transparent, accessible, intelligent. Predictive Maintenance, engineered for clarity. | |
 
 ---
 
 ## Documentation
 
-| Document | Description |
+| Document | What it covers |
 |---|---|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Component breakdown, data flow, Kafka topic map, design decisions |
-| [docs/API.md](docs/API.md) | Full REST API reference with request/response shapes |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Each service, Kafka topic map, InfluxDB measurements, design decisions |
+| [docs/API.md](docs/API.md) | Every REST endpoint with request bodies, response shapes, and required roles |
 
 ---
 
 ## Dataset
 
-This project uses the [NASA C-MAPSS Turbofan Engine Degradation Simulation dataset](https://data.nasa.gov/dataset/C-MAPSS-Aircraft-Engine-Simulator-Data/xaut-bemq). The dataset is not included in this repository. Place the raw files under simulator/data/cmapss/ before starting the simulator.
+This project uses the [NASA C-MAPSS Turbofan Engine Degradation Simulation dataset](https://data.nasa.gov/dataset/C-MAPSS-Aircraft-Engine-Simulator-Data/xaut-bemq).
+The dataset files are not included in this repository. Download them from NASA and place them under `simulator/data/cmapss/` before starting the simulator service.
 
 ---
 
 ## Project Status
 
-Active development - Final Year Project, SZABIST University, Islamabad Campus.
+**Active development** — Final Year Project, SZABIST University, Islamabad Campus.
 Supervisor: Dr. Muhammad Imran | Author: Ghulam Mustafa
 
 **Completed**
-- Kafka ingestion pipeline and InfluxDB time-series storage (Layer 1)
-- Real-time preprocessing with feature scaling and windowing (Layer 2)
-- LSTM model training and streaming inference (Layer 2)
-- FastAPI backend with JWT auth, RBAC, and audit logging (Layer 3)
-- Live dashboard, alert centre, anomaly detection UI, and user management (Layer 4)
+- Layer 1: Kafka ingestion pipeline and InfluxDB time-series storage
+- Layer 2: Real-time preprocessing, LSTM model training and streaming inference
+- Layer 3: FastAPI backend with JWT authentication, RBAC, anomaly detection, and alert lifecycle
+- Layer 4: Live dashboard, fleet view, alert centre, anomaly page, and user management
 
 **In progress**
-- Automated alert triggering directly from the prediction pipeline
+- Automated alert triggering from the prediction pipeline
 - Advanced analytics and reporting page
