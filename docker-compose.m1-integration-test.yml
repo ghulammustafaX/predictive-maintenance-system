@@ -45,7 +45,7 @@ services:
     networks:
       - m1-test-net
     healthcheck:
-      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list 2>/dev/null || exit 1"]
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server kafka:9092 --list 2>/dev/null || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 15
@@ -130,6 +130,27 @@ services:
     networks:
       - m1-test-net
     restart: "no"
+
+  # ─── INFLUXDB (isolated test instance, port 38086) ─────────
+  influxdb:
+    image: influxdb:2.7
+    container_name: pms-m1-test-influxdb
+    ports:
+      - "38086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: testuser
+      DOCKER_INFLUXDB_INIT_PASSWORD: testpass123
+      DOCKER_INFLUXDB_INIT_ORG: pms-test-org
+      DOCKER_INFLUXDB_INIT_BUCKET: test-sensor-data
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: test-token-m1-gap-verification
+    networks:
+      - m1-test-net
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
 
 networks:
   m1-test-net:
