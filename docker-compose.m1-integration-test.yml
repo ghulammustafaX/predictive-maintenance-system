@@ -60,7 +60,7 @@ services:
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
-        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic sensor-telemetry --partitions 1 --replication-factor 1 && kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic bearing-telemetry --partitions 1 --replication-factor 1 && kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic sensor-telemetry-dead-letter --partitions 1 --replication-factor 1 && kafka-topics --bootstrap-server kafka:9092 --describe && echo "Topics ready"
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic sensor-telemetry --partitions 1 --replication-factor 1 && kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic bearing-telemetry --partitions 1 --replication-factor 1 && kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic sensor-telemetry-dead-letter --partitions 1 --replication-factor 1 && kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic preprocessed-telemetry --partitions 1 --replication-factor 1 && kafka-topics --bootstrap-server kafka:9092 --describe && echo "Topics ready"
     networks:
       - m1-test-net
 
@@ -130,6 +130,51 @@ services:
     networks:
       - m1-test-net
     restart: "no"
+
+  # ─── ACTUAL PREPROCESSING SERVICE ──────────────────────────
+  preprocessing:
+    image: predictive-maintenance-system-preprocessing
+    container_name: pms-m1-test-preprocessing
+    depends_on:
+      kafka:
+        condition: service_healthy
+      topic-init:
+        condition: service_completed_successfully
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      PREPROCESSING_INPUT_TOPIC: sensor-telemetry
+      PREPROCESSING_OUTPUT_TOPIC: preprocessed-telemetry
+      PREPROCESSING_ARTIFACT_DIR: /app/ml/saved_v2_a1/scalers
+      PREPROCESSING_CONSUMER_GROUP: test-preprocessing-group
+    networks:
+      - m1-test-net
+    restart: on-failure
+
+  # ─── ACTUAL INGESTION CONSUMER → ISOLATED INFLUXDB ─────────
+  consumer:
+    build: ./ingestion
+    container_name: pms-m1-test-consumer
+    depends_on:
+      kafka:
+        condition: service_healthy
+      topic-init:
+        condition: service_completed_successfully
+      influxdb:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER: kafka:9092
+      SENSOR_TOPIC: sensor-telemetry
+      CONSUMER_GROUP: test-influxdb-writer-group
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: test-token-m1-gap-verification
+      INFLUXDB_ORG: pms-test-org
+      INFLUXDB_BUCKET: test-sensor-data
+      KAFKA_MAX_POLL_RECORDS: "50"
+      KAFKA_MAX_POLL_INTERVAL_MS: "300000"
+      KAFKA_COMMIT_TIMEOUT_MS: "10000"
+    networks:
+      - m1-test-net
+    restart: on-failure
 
   # ─── INFLUXDB (isolated test instance, port 38086) ─────────
   influxdb:
