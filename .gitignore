@@ -396,6 +396,15 @@ docs/module6-compatibility.md
 !docs/slides/
 !docs/slides/*.jpg
 !docs/*.pptx
+# Module documentation (explicitly NOT ignored)
+!docs/MODULE1_BASELINE.md
+!docs/MODULE1_ARCHITECTURE.md
+!docs/MODULE1_FINAL_VERIFICATION_REPORT.md
+!docs/MODULE2_ARCHITECTURE.md
+!docs/MODULE2_VERIFICATION_REPORT.md
+!docs/MODULE2_USER_GUIDE.md
+!docs/ENVIRONMENT_VARIABLES.md
+!docs/NOTION_MODULE1_GUIDE.md
 
 # ═══════════════════════════════════════════════════════════════════
 # PERMANENT RULES — keep the repo clean going forward
@@ -412,6 +421,12 @@ conftest.py
 *.spec.js
 *.test.ts
 *.spec.ts
+# Module 02 tests are explicitly kept
+!tests/
+!tests/test_ingestion_consumer.py
+!tests/test_ingestion_mqtt_bridge.py
+# Module 02 E2E test script
+!scripts/run_ingestion_e2e_test.py
 
 # No ad-hoc / one-off scripts
 read_data.py
