@@ -2,19 +2,25 @@
 
 **Repository:** `ghulammustafaX/predictive-maintenance-system`  
 **Report date:** 2026-11-18  
-**Git HEAD:** `6bdd701c87dafe0973e4579ec4248754fe49ae9e`  
-**Short:** `6bdd701`
+**Git HEAD:** `256faefd914aadef7dd6e07077287a8ffd3cb06c`  
+**Short:** `256faef`
 
 ```
-git log --oneline -4
-  6bdd701  Defect corrections: event_id deduplication in SequenceTracker;
-           real preprocessing-to-InfluxDB integration verified (197 tests pass)
+git log --oneline -5
+  256faef  docs: corrected final verification report — 197 tests, unconditional acceptance
+  6bdd701  Defect corrections: event_id deduplication in SequenceTracker; real
+           preprocessing-to-InfluxDB integration verified (197 tests pass)
   672b115  Final verification: 185 tests pass; Phase 2–3 tests, isolation guard
   045312a  Phase 11 gap verification: Tasks 1-7 all pass
   62efaf0  Phase 11: fix IMS extraction, SequenceTracker, kafka_producer
 
 git status
   Clean working tree
+```
+
+**Fresh test run on HEAD 256faef (2026-11-18):**
+```
+197 passed, 2 skipped, 1 warning in 82.87s
 ```
 
 ---
@@ -274,4 +280,4 @@ L-2 (event-ID deduplication) has been **resolved by this fix** (Defect 1).
 | Replay count 1,437 reconciled (192+287=479 × 3) | PASS |
 | 197 automated tests pass, 0 fail | PASS |
 | Production Kafka offsets unchanged (20,671) | PASS |
-| Git HEAD `6bdd701`, clean working tree | PASS |
+| Git HEAD `256faef`, clean working tree | PASS |

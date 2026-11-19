@@ -133,6 +133,40 @@ The slides below summarise the full system. Open the [full presentation](https:/
 
 ---
 
+## Module Documentation
+
+| # | Module | Description | Documentation | Status |
+|---|---|---|---|---|
+| 01 | **IoT Simulation** | NASA C-MAPSS and IMS dataset simulation, MQTT publishing, Kafka integration and telemetry event management | [Notion guide](https://app.notion.com/p/ghulammustafa/Module-01-IoT-Simulation-41a6c3c1abf18095839fe060beb29214) · [Baseline](docs/MODULE1_BASELINE.md) · [Architecture](docs/MODULE1_ARCHITECTURE.md) · [Verification report](docs/MODULE1_FINAL_VERIFICATION_REPORT.md) | ✅ Verified core baseline |
+| 02 | Kafka Ingestion & MQTT Bridge | Raw telemetry consumer writing to InfluxDB; MQTT-to-Kafka bridge routing C-MAPSS and IMS events | [Architecture](docs/ARCHITECTURE.md) | ✅ Completed |
+| 03 | InfluxDB Storage | Time-series storage for raw sensor readings with tag-based queries | [Architecture](docs/ARCHITECTURE.md) | ✅ Completed |
+| 04 | Data Preprocessing | Min-Max normalisation, sliding window assembly, RUL label assignment | [Architecture](docs/ARCHITECTURE.md) | ✅ Completed |
+| 05 | Feature Engineering | Sensor selection, EWMA smoothing, feature store | [Architecture](docs/ARCHITECTURE.md) | ✅ Completed |
+| 06 | LSTM RUL Prediction | Two-layer stacked LSTM inference service; writes predictions to InfluxDB | [Architecture](docs/ARCHITECTURE.md) | ✅ Completed |
+| 07 | Anomaly Detection | Z-score and threshold-based anomaly detection on stored telemetry | [Architecture](docs/ARCHITECTURE.md) | ✅ Completed |
+| 08 | Backend API & Auth | FastAPI service: JWT + RBAC, alert lifecycle, audit log, PostgreSQL | [API reference](docs/API.md) | ✅ Completed |
+| 09 | Alert Engine | Alert creation, acknowledgement, resolution and work-order lifecycle | [API reference](docs/API.md) | ✅ Completed |
+| 10 | Frontend Dashboard | Fleet status, sensor charts, RUL panel, anomaly page, alert centre | — | ✅ Completed |
+| 11 | User Management | Admin CRUD for users, roles and permissions | [API reference](docs/API.md) | ✅ Completed |
+| 12 | Reporting & Analytics | Advanced analytics and reporting page | — | 🔄 In progress |
+
+---
+
+## Technical Reference
+
+---
+
+## Technical Reference
+
+| Document | What it covers |
+|---|---|
+| [docs/MODULE1_BASELINE.md](docs/MODULE1_BASELINE.md) | Module 01 verified baseline, public interfaces, event schemas, change-control policy |
+| [docs/MODULE1_ARCHITECTURE.md](docs/MODULE1_ARCHITECTURE.md) | Module 01 component design, data-flow diagrams, replay modes |
+| [docs/MODULE1_FINAL_VERIFICATION_REPORT.md](docs/MODULE1_FINAL_VERIFICATION_REPORT.md) | Complete Module 01 verification evidence with test results |
+| [docs/ENVIRONMENT_VARIABLES.md](docs/ENVIRONMENT_VARIABLES.md) | All environment variables for Modules 01 and 02 |
+
+---
+
 ## Dataset
 
 This project uses the [NASA C-MAPSS Turbofan Engine Degradation Simulation dataset](https://data.nasa.gov/dataset/C-MAPSS-Aircraft-Engine-Simulator-Data/xaut-bemq).
