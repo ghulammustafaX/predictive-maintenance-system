@@ -8,6 +8,7 @@ then queries InfluxDB to verify storage.
 Runs INSIDE the pms-ingestion-reliability-test Docker network.
 Execute as:
   docker run --rm --network pms-ingestion-reliability-test-network \\
+    -e MODULE2_TEST_GUARD=isolated-ingestion-reliability-test \\
     -v <host_project_dir>:/app -w /app \\
     pms-ingestion-reliability-test-consumer python scripts/run_ingestion_e2e_test.py
 
@@ -19,12 +20,19 @@ Environment assumed (matches docker-compose.ingestion-reliability-test.yml):
   INFLUXDB_TOKEN   = ingestion-reliability-test-token
   INFLUXDB_ORG     = pms-ingestion-reliability-test-org
   INFLUXDB_BUCKET  = pms-ingestion-reliability-test-bucket
+
+This historical probe assumes fresh, empty test topics and a fresh test group.
+The guard is an explicit opt-in, not proof of network isolation; inspect the
+project network and endpoints before running it.
 """
 from __future__ import annotations
-import json, sys, time, uuid
+import json, os, sys, time, uuid
 from datetime import datetime, timezone
 from kafka import KafkaProducer, KafkaConsumer, TopicPartition
 from influxdb_client import InfluxDBClient
+
+if os.getenv("MODULE2_TEST_GUARD") != "isolated-ingestion-reliability-test":
+    raise RuntimeError("Refusing to run outside the isolated ingestion reliability test")
 
 KAFKA_BROKER  = "kafka:9092"
 SENSOR_TOPIC  = "pms-ingestion-reliability-test-sensor"
@@ -58,7 +66,7 @@ print("Step 1: Build 10 valid C-MAPSS payloads")
 run_id = uuid.uuid4().hex
 payloads = []
 for cycle in range(1, 11):
-    ts = datetime(2026, 11, 19, 10, 0, cycle, tzinfo=timezone.utc).isoformat()
+    ts = datetime.now(timezone.utc).isoformat()
     p = {
         "schema_version": "1.0.0",
         "event_id": str(uuid.uuid5(uuid.UUID(int=0), f"{run_id}:engine_1:{cycle}")),
@@ -152,7 +160,7 @@ from(bucket: "{INFLUX_BUCKET}")
   |> count()
 '''
 tables = q_api.query(q_count, org=INFLUX_ORG)
-stored_count = sum(len(t.records) for t in tables)
+stored_count = sum(r.get_value() for t in tables for r in t.records)
 check("10 valid records stored in InfluxDB", stored_count == 10,
       f"got {stored_count}")
 
@@ -254,9 +262,8 @@ try:
     check("consumer committed all 12 message offsets",
           total_committed == 12, f"committed {total_committed}")
 except Exception as e:
-    # Fallback: use kafka-consumer-groups output pattern matching
-    print(f"  INFO  AdminClient check skipped ({e}); offsets verified via Step 4 (lag=0)")
-    PASS.append("consumer committed all 12 message offsets (lag=0 confirmed in Step 4)")
+    check("consumer committed all 12 message offsets", False,
+          f"offset query failed: {e}")
 
 # ------------------------------------------------------------------
 # Summary

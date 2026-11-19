@@ -188,7 +188,7 @@ class TestDecodeMessage:
 
     def test_unit_id_as_string_integer_accepted(self):
         from kafka_consumer import decode_message
-        result = decode_message(_vp(unit_id="5"))
+        result = decode_message(_vp(unit_id="5", asset_id="engine_5"))
         assert int(result["unit_id"]) == 5
 
     def test_time_cycles_as_string_integer_accepted(self):
@@ -215,7 +215,7 @@ class TestBuildPoint:
 
     def test_unit_id_tag_as_string(self):
         from kafka_consumer import build_point
-        point = build_point(_vp(unit_id=5))
+        point = build_point(_vp(unit_id=5, asset_id="engine_5"))
         assert point._tags["unit_id"] == "5"
 
     def test_run_id_tag(self):
@@ -280,13 +280,13 @@ class TestBuildPoint:
 
     def test_missing_dataset_id_defaults_to_unknown(self):
         from kafka_consumer import build_point
-        p = _vp(); del p["dataset_id"]
+        p = _vp(); del p["dataset_id"]; del p["schema_version"]
         point = build_point(p)
         assert point._tags["dataset_id"] == "unknown"
 
     def test_missing_run_id_defaults_to_default(self):
         from kafka_consumer import build_point
-        p = _vp(); del p["run_id"]
+        p = _vp(); del p["run_id"]; del p["schema_version"]
         point = build_point(p)
         assert point._tags["run_id"] == "default"
 
@@ -545,13 +545,71 @@ class TestSchemaVersionBackwardCompat:
         p = _vp(); del p["schema_version"]
         assert decode_message(p)["unit_id"] == 1
 
-    def test_future_schema_version_accepted(self):
+    def test_future_schema_version_rejected(self):
         from kafka_consumer import decode_message
-        assert decode_message(_vp(schema_version="2.0.0"))["unit_id"] == 1
+        with pytest.raises(ValueError, match="unsupported schema"):
+            decode_message(_vp(schema_version="2.0.0"))
 
-    def test_unknown_schema_version_accepted(self):
+    def test_unknown_schema_version_rejected(self):
         from kafka_consumer import decode_message
-        assert decode_message(_vp(schema_version="99.0.0"))["dataset_id"] == "FD001"
+        with pytest.raises(ValueError, match="unsupported schema"):
+            decode_message(_vp(schema_version="99.0.0"))
+
+    @pytest.mark.parametrize("field,value", [
+        ("sensor_1", float("nan")), ("sensor_2", float("inf")),
+        ("sensor_3", True), ("operational_setting_1", float("-inf")),
+    ])
+    def test_nonfinite_and_boolean_measurements_rejected(self, field, value):
+        from kafka_consumer import decode_message
+        with pytest.raises(ValueError, match="invalid numeric field"):
+            decode_message(_vp(**{field: value}))
+
+    def test_invalid_utf8_is_dead_lettered(self):
+        from kafka_consumer import process_message
+        message = _msg(_vp())
+        message.value = b"\xff"
+        producer = _mock_producer()
+        writer = _mock_write_api()
+        process_message(writer, producer, message)
+        writer.write.assert_not_called()
+        producer.send.assert_called_once()
+
+    def test_storage_value_error_is_not_dead_lettered(self):
+        from kafka_consumer import process_message
+        producer = _mock_producer()
+        with patch("kafka_consumer.write_to_influxdb", side_effect=ValueError("storage failure")):
+            with pytest.raises(ValueError, match="storage failure"):
+                process_message(_mock_write_api(), producer, _msg(_vp()))
+        producer.send.assert_not_called()
+
+    def test_null_sensor_from_module1_is_omitted(self):
+        from kafka_consumer import build_point
+        point = build_point(_vp(sensor_1=None))
+        assert "sensor_1" not in point._fields
+
+    @pytest.mark.parametrize("field,value", [
+        ("event_id", ""), ("run_id", None), ("dataset_id", " "),
+        ("asset_id", "engine_2"), ("source_type", "ims"),
+        ("sequence", True), ("sequence", 0), ("sequence", "1"),
+    ])
+    def test_invalid_versioned_envelope_rejected(self, field, value):
+        from kafka_consumer import decode_message
+        with pytest.raises(ValueError):
+            decode_message(_vp(**{field: value}))
+
+    @pytest.mark.parametrize("field", ["event_id", "run_id", "dataset_id", "asset_id", "source_type", "sequence"])
+    def test_missing_versioned_envelope_field_rejected(self, field):
+        from kafka_consumer import decode_message
+        payload = _vp()
+        del payload[field]
+        with pytest.raises(ValueError, match="missing required field"):
+            decode_message(payload)
+
+    @pytest.mark.parametrize("field,value", [("unit_id", True), ("unit_id", 1.5), ("time_cycles", 0), ("unit_id", float("inf"))])
+    def test_invalid_integer_identity_rejected(self, field, value):
+        from kafka_consumer import decode_message
+        with pytest.raises(ValueError, match="invalid integer field"):
+            decode_message(_vp(**{field: value}))
 
 
 # ---------------------------------------------------------------------------

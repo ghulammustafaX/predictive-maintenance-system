@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import time
 from datetime import datetime
@@ -98,10 +99,40 @@ def decode_message(value: bytes | str | dict[str, Any]) -> dict[str, Any]:
     missing = [field for field in REQUIRED_FIELDS if field not in payload]
     if missing:
         raise ValueError(f"missing required fields: {','.join(missing)}")
-    int(payload["unit_id"])
-    int(payload["time_cycles"])
+    for field in ("unit_id", "time_cycles"):
+        value = payload[field]
+        if isinstance(value, bool):
+            raise ValueError(f"invalid integer field: {field}")
+        try:
+            converted = int(value)
+        except (ValueError, TypeError, OverflowError) as exc:
+            raise ValueError(f"invalid integer field: {field}") from exc
+        if converted < 1 or (isinstance(value, float) and value != converted):
+            raise ValueError(f"invalid integer field: {field}")
     for field in NUMERIC_FIELDS:
-        float(payload[field])
+        if isinstance(payload[field], bool) or not math.isfinite(float(payload[field])):
+            raise ValueError(f"invalid numeric field: {field}")
+    for index in range(1, 22):
+        field = f"sensor_{index}"
+        if payload.get(field) is not None and (isinstance(payload[field], bool) or
+                                               not math.isfinite(float(payload[field]))):
+            raise ValueError(f"invalid numeric field: {field}")
+    if "schema_version" in payload and payload["schema_version"] != "1.0.0":
+        raise ValueError("unsupported schema version")
+    if "schema_version" in payload:
+        for field in ("event_id", "run_id", "dataset_id", "asset_id", "source_type", "sequence"):
+            if field not in payload:
+                raise ValueError(f"missing required field: {field}")
+        for field in ("event_id", "run_id", "dataset_id", "asset_id", "source_type"):
+            if not isinstance(payload[field], str) or not payload[field].strip():
+                raise ValueError(f"invalid field: {field}")
+        if payload["source_type"] not in ("cmapss", "synthetic"):
+            raise ValueError("invalid source_type")
+        sequence = payload["sequence"]
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise ValueError("invalid sequence")
+        if payload["asset_id"] != f"engine_{int(payload['unit_id'])}":
+            raise ValueError("asset_id does not match unit_id")
     if not payload.get("source_timestamp") and not payload.get("timestamp"):
         raise ValueError("missing required field: timestamp")
     return payload
@@ -192,9 +223,12 @@ def process_message(write_api: Any, producer: KafkaProducer, message: Any) -> No
     """Handle one record; return only after persistence or durable DLQ."""
     try:
         payload = decode_message(message.value)
-        write_to_influxdb(write_api, payload)
-    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        build_point(payload)
+    except (ValueError, TypeError, UnicodeDecodeError) as exc:
         dead_letter(producer, message, exc)
+        return
+    try:
+        write_to_influxdb(write_api, payload)
     except Exception:
         logger.exception(
             "Telemetry processing failed; offset remains uncommitted topic=%s partition=%s offset=%s",

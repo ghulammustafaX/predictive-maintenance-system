@@ -1,5 +1,9 @@
 # Module 02 — Data Ingestion: Architecture
 
+> The bridge uses Paho 2 manual acknowledgment and a stable persistent MQTT session. Kafka confirmation precedes acknowledgment; publish failures stop the bridge without acknowledging. Isolated outage, broker restart and active-ingestion restart checks passed; they do not establish recovery for every failure mode. Use a unique stable `MQTT_CLIENT_ID` per bridge instance. QoS 0 has no acknowledgment or redelivery guarantee. See the verification report.
+
+Versioned C-MAPSS messages require identity and sequence fields, a supported source type and an asset ID matching the unit. Legacy messages without `schema_version` retain the earlier optional identity defaults. Null sensor values are omitted, while non-finite values are rejected. Identical measurement, tag and timestamp combinations overwrite an InfluxDB point; `event_id` is not stored or used for deduplication. The consumer commits after a synchronous write or confirmed dead-letter publication, and write failures leave the offset uncommitted.
+
 **Version:** 1.0  
 **Date:** 2026-11-19  
 **Git HEAD:** `b41ef9b` (baseline) + Module 02 tests and docs  
@@ -158,12 +162,9 @@ If `source_timestamp` is present, it takes precedence.
 ### Duplicate-Point Behavior
 
 InfluxDB uses **last-write-wins** for a point with identical
-`(measurement, tags, timestamp)`. Since `timestamp` is the simulator
-wall-clock at publication time, two events with the same `run_id`,
-`unit_id`, and `cycle` will have the same timestamp and silently overwrite
-each other. In practice this only matters if the simulator retries a replay
-pass with the same `run_id`, which does not happen by design
-(a new `run_id` is generated for every replay pass).
+`(measurement, tags, timestamp)`. An identical retry retains that point
+identity and overwrites it. Two events with the same run, unit and cycle but
+different timestamps are different points; `event_id` is not used to deduplicate.
 
 ---
 
@@ -181,7 +182,7 @@ pass with the same `run_id`, which does not happen by design
 | Dead-letter producer | `acks=all`, awaits broker ack before source offset is committed |
 
 **Delivery guarantee: at-least-once.**  
-Effectively-once storage is achieved via InfluxDB point-identity overwrite.  
+Identical point identities overwrite; this is not general event-ID deduplication.
 No exactly-once transaction semantics are claimed.
 
 ---

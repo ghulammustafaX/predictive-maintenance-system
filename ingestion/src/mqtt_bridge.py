@@ -25,7 +25,7 @@ MQTT_PORT               MQTT broker port           (default: 1883)
 MQTT_TOPIC_CMAPSS       MQTT C-MAPSS topic         (default: pms/telemetry/cmapss)
 MQTT_TOPIC_IMS          MQTT IMS topic             (default: pms/telemetry/ims)
 MQTT_QOS                Subscription QoS           (default: 1)
-MQTT_CLIENT_ID          Bridge client ID           (default: pms-mqtt-bridge-<uuid>)
+MQTT_CLIENT_ID          Stable bridge client ID    (default: pms-mqtt-bridge)
 BRIDGE_ENABLED          'true' to run bridge; 'false' to skip (default: true)
 """
 
@@ -36,7 +36,6 @@ import logging
 import os
 import sys
 import time
-import uuid
 from typing import Any
 
 logger = logging.getLogger("pms.mqtt_bridge")
@@ -58,7 +57,7 @@ MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 MQTT_TOPIC_CMAPSS = os.getenv("MQTT_TOPIC_CMAPSS", "pms/telemetry/cmapss")
 MQTT_TOPIC_IMS = os.getenv("MQTT_TOPIC_IMS", "pms/telemetry/ims")
 MQTT_QOS = int(os.getenv("MQTT_QOS", "1"))
-MQTT_CLIENT_ID = os.getenv("MQTT_CLIENT_ID", f"pms-mqtt-bridge-{uuid.uuid4().hex[:8]}")
+MQTT_CLIENT_ID = os.getenv("MQTT_CLIENT_ID", "pms-mqtt-bridge")
 
 # Required fields for C-MAPSS messages
 CMAPSS_REQUIRED = {
@@ -113,6 +112,7 @@ class MQTTKafkaBridge:
         self._kafka = None
         self._mqtt_client = None
         self._stop = False
+        self._failure = None
         self._stats = {
             "cmapss_forwarded": 0,
             "ims_forwarded": 0,
@@ -144,6 +144,7 @@ class MQTTKafkaBridge:
                         retries=5,
                         enable_idempotence=True,
                         max_in_flight_requests_per_connection=5,
+                        max_block_ms=10000,
                     )
 
                 def send(self, topic, payload, key=None):
@@ -151,8 +152,8 @@ class MQTTKafkaBridge:
                     self._p.send(topic, value=payload, **kw).get(timeout=10)
 
                 def close(self):
-                    self._p.flush()
-                    self._p.close()
+                    self._p.flush(timeout=10)
+                    self._p.close(timeout=10)
 
             self._kafka = _Adapter()
             logger.info("Kafka producer connected (direct kafka-python fallback)")
@@ -173,16 +174,14 @@ class MQTTKafkaBridge:
         except ImportError as exc:
             raise RuntimeError("paho-mqtt is required for the MQTT bridge") from exc
 
-        # paho-mqtt 2.x changed the Client constructor; handle both versions.
-        try:
-            from paho.mqtt.enums import CallbackAPIVersion
-            client = mqtt.Client(
-                callback_api_version=CallbackAPIVersion.VERSION1,
-                client_id=MQTT_CLIENT_ID,
-            )
-        except ImportError:
-            # paho-mqtt 1.x
-            client = mqtt.Client(client_id=MQTT_CLIENT_ID, protocol=mqtt.MQTTv311)
+        from paho.mqtt.enums import CallbackAPIVersion
+        client = mqtt.Client(
+            callback_api_version=CallbackAPIVersion.VERSION1,
+            client_id=MQTT_CLIENT_ID,
+            clean_session=False,
+            protocol=mqtt.MQTTv311,
+            manual_ack=True,
+        )
         client.on_connect = self._on_connect
         client.on_message = self._on_message
         client.on_disconnect = self._on_disconnect
@@ -222,7 +221,21 @@ class MQTTKafkaBridge:
         if rc != 0:
             logger.warning("MQTT unexpected disconnect rc=%d", rc)
 
-    def _on_message(self, _client, _ud, msg) -> None:
+    def _on_message(self, client, _ud, msg) -> None:
+        """Acknowledge only after Kafka confirms delivery; restart on failure."""
+        try:
+            self._route_message(msg)
+            if msg.qos:
+                result = client.ack(msg.mid, msg.qos)
+                if result != 0:
+                    raise RuntimeError(f"MQTT acknowledgement failed: {result}")
+        except Exception as exc:
+            logger.exception("MQTT delivery not acknowledged mid=%s qos=%s", msg.mid, msg.qos)
+            self._failure = exc
+            self._stop = True
+            client.disconnect()
+
+    def _route_message(self, msg) -> None:
         """Route one MQTT message to the appropriate Kafka topic."""
         try:
             payload = json.loads(msg.payload.decode("utf-8"))
@@ -237,12 +250,13 @@ class MQTTKafkaBridge:
             return
 
         try:
+            if not isinstance(payload, dict):
+                raise ValueError("payload must be a JSON object")
             if msg.topic == MQTT_TOPIC_CMAPSS:
                 validate_cmapss(payload)
                 unit_id = str(int(payload["unit_id"]))
                 kafka_key = f"{payload.get('dataset_id', 'UNK')}:{unit_id}:{payload['run_id']}"
-                self._kafka.send(SENSOR_TOPIC, payload, key=kafka_key)
-                self._stats["cmapss_forwarded"] += 1
+                kafka_topic, stat = SENSOR_TOPIC, "cmapss_forwarded"
 
             elif msg.topic == MQTT_TOPIC_IMS:
                 validate_ims(payload)
@@ -251,8 +265,7 @@ class MQTTKafkaBridge:
                     f"{payload.get('bearing_name', '?')}:"
                     f"{payload['run_id']}"
                 )
-                self._kafka.send(BEARING_TOPIC, payload, key=kafka_key)
-                self._stats["ims_forwarded"] += 1
+                kafka_topic, stat = BEARING_TOPIC, "ims_forwarded"
 
             else:
                 logger.warning("Received message on unrouted topic=%s", msg.topic)
@@ -260,10 +273,7 @@ class MQTTKafkaBridge:
                     {**payload, "error": f"unrouted_topic:{msg.topic}"}
                 )
                 self._stats["dead_lettered"] += 1
-
-            total = sum(self._stats.values())
-            if total % 500 == 0:
-                logger.info("Bridge stats: %s", self._stats)
+                return
 
         except (ValueError, TypeError, KeyError) as exc:
             self._stats["dead_lettered"] += 1
@@ -277,13 +287,18 @@ class MQTTKafkaBridge:
                 "error": str(exc),
                 "mqtt_topic": msg.topic,
             })
+            return
+
+        # Producer errors are infrastructure failures, never validation errors.
+        self._kafka.send(kafka_topic, payload, key=kafka_key)
+        self._stats[stat] += 1
+        total = sum(self._stats.values())
+        if total % 500 == 0:
+            logger.info("Bridge stats: %s", self._stats)
 
     def _dead_letter(self, payload: dict) -> None:
         """Forward an unprocessable message to the dead-letter topic."""
-        try:
-            self._kafka.send(DEAD_LETTER_TOPIC, payload)
-        except Exception as exc:
-            logger.error("Dead-letter publish failed: %s", exc)
+        self._kafka.send(DEAD_LETTER_TOPIC, payload)
 
     # ------------------------------------------------------------------
     # Main loop
@@ -322,6 +337,8 @@ class MQTTKafkaBridge:
             if self._kafka:
                 self._kafka.close()
             logger.info("Bridge stopped. Final stats: %s", self._stats)
+        if self._failure is not None:
+            raise RuntimeError("Bridge stopped after an unacknowledged delivery") from self._failure
 
 
 def main() -> None:

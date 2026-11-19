@@ -1,5 +1,42 @@
 # Module 02 — Data Ingestion: User Guide
 
+> The bridge requires Paho MQTT 2.x and uses a persistent session with a stable client ID. Do not run two bridge instances with the same `MQTT_CLIENT_ID`. Isolated end-to-end, outage and restart tests passed; not every failure scenario has been tested. See the verification report.
+
+Kafka may deliver a reading again after a failure. If the measurement, tags and timestamp are identical, InfluxDB updates the same point. This is not exactly-once processing. A failed database write leaves the Kafka offset uncommitted for a later retry. IMS readings currently stop at the bearing Kafka topic; a downstream IMS storage consumer is not implemented.
+
+The isolated test configuration is `docker-compose.module2-verification.yml`. It uses the local image `pms-ingestion-reliability-test-consumer:latest`, no host ports and a project-specific network. From PowerShell in the repository root, build the image and start a fresh test project:
+
+```powershell
+docker build -t pms-ingestion-reliability-test-consumer:latest ./ingestion
+docker compose -p pms-m2-verify -f docker-compose.module2-verification.yml up -d
+```
+
+Wait for the bridge subscription and consumer assignment in `docker compose -p pms-m2-verify -f docker-compose.module2-verification.yml logs bridge consumer`. Check that the project is separate from production before running the probe. Replace `my-unique-run` for every run:
+
+```powershell
+docker compose -p pms-m2-verify -f docker-compose.module2-verification.yml run --rm --no-deps -v "${PWD}:/work:ro" consumer python /work/scripts/module2_real_probe.py my-unique-run publish
+docker compose -p pms-m2-verify -f docker-compose.module2-verification.yml run --rm --no-deps -v "${PWD}:/work:ro" consumer python /work/scripts/module2_real_probe.py my-unique-run verify
+docker compose -p pms-m2-verify -f docker-compose.module2-verification.yml down
+```
+
+The test-only environment flag is an opt-in guard, not proof that the network is isolated. `down` above retains volumes. This probe checks one event and does not automate the full outage test; the historical `run_ingestion_e2e_test.py` additionally requires fresh, empty test topics and the guard specified in its docstring.
+
+For the active-ingestion restart check, start a fresh project as above and wait for subscription and assignment. The following publisher sends 160 readings over about 80 seconds; use a unique run ID and verify the network name belongs to the test project:
+
+```powershell
+docker run -d --name m2-test-publisher --network pms-m2-verify_default -e MODULE2_TEST_GUARD=isolated-module2-verification -v "${PWD}:/work:ro" -w /work --entrypoint python pms-ingestion-reliability-test-consumer:latest scripts/module2_stream_restart_probe.py my-stream-run publish 160
+docker logs --tail 5 m2-test-publisher
+docker compose -p pms-m2-verify -f docker-compose.module2-verification.yml exec -T kafka kafka-consumer-groups --bootstrap-server localhost:9092 --group m2-test-writer --describe
+docker stop -t 2 pms-m2-verify-consumer-1
+# While publishing continues, repeat the group-offset command above.
+docker start pms-m2-verify-consumer-1
+docker wait m2-test-publisher
+docker compose -p pms-m2-verify -f docker-compose.module2-verification.yml run --rm --no-deps -v "${PWD}:/work:ro" consumer python /work/scripts/module2_stream_restart_probe.py my-stream-run verify 160
+docker rm m2-test-publisher
+```
+
+After the publisher completes, wait for the group lag to reach zero before verification; check the publisher exit code and Kafka offsets. The verifier matches Kafka event IDs and every stored sensor value by run and cycle. `scripts/module2_commit_fault.py` is a separate fault-injection runner that must only be used with the isolated test topic, group and guard; it deliberately raises instead of committing.
+
 **Audience:** Beginners and developers new to the PMS project.  
 **Updated:** 2026-11-19
 
@@ -219,7 +256,7 @@ python -m pytest tests/test_ingestion_consumer.py tests/test_ingestion_mqtt_brid
 python -m pytest tests/ --ignore=tests/test_m1_integration.py -q
 ```
 
-Expected result: **298 passed, 2 skipped**
+Test totals depend on the current test suite and environment; inspect the output of your own run.
 
 ---
 

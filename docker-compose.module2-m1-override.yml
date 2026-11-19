@@ -1,0 +1,6 @@
+# Test-only topic names required by tests/test_m1_integration.py.
+services:
+  bridge:
+    environment:
+      SENSOR_TOPIC: sensor-telemetry
+      DEAD_LETTER_TOPIC: sensor-telemetry-dead-letter

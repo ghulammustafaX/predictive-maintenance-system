@@ -9,7 +9,7 @@ Coverage:
   validate_ims     - required fields, features dict type
   _on_message      - C-MAPSS routing, IMS routing, dead-letter routing,
                      malformed JSON, unrouted topic
-  _dead_letter     - fallback if DLQ send fails (silent, no raise)
+  _dead_letter     - propagation of DLQ send failures
   Stats tracking   - forwarded / dead_lettered / parse_errors counters
 """
 from __future__ import annotations
@@ -73,6 +73,51 @@ def _make_bridge():
     bridge = MQTTKafkaBridge()
     bridge._kafka = MagicMock()
     return bridge
+
+
+def test_acknowledges_only_after_kafka_confirms():
+    bridge = _make_bridge()
+    client = MagicMock()
+    client.ack.return_value = 0
+    msg = _make_mqtt_msg("pms/telemetry/cmapss", _cmapss_payload())
+    msg.mid, msg.qos = 42, 1
+    order = []
+    bridge._kafka.send.side_effect = lambda *a, **kw: order.append("kafka")
+    client.ack.side_effect = lambda *a: order.append("ack") or 0
+    bridge._on_message(client, None, msg)
+    assert order == ["kafka", "ack"]
+    client.ack.assert_called_once_with(42, 1)
+
+
+@pytest.mark.parametrize("invalid", [False, True])
+def test_publish_failure_leaves_message_unacknowledged(invalid):
+    bridge = _make_bridge()
+    client = MagicMock()
+    payload = _cmapss_payload()
+    if invalid:
+        del payload["unit_id"]
+    msg = _make_mqtt_msg("pms/telemetry/cmapss", payload)
+    msg.mid, msg.qos = 43, 1
+    bridge._kafka.send.side_effect = RuntimeError("broker down")
+    bridge._on_message(client, None, msg)
+    client.ack.assert_not_called()
+    client.disconnect.assert_called_once()
+    assert bridge._failure is not None
+
+
+def test_invalid_message_acknowledged_after_dead_letter_confirmation():
+    bridge = _make_bridge()
+    client = MagicMock()
+    client.ack.return_value = 0
+    payload = _cmapss_payload()
+    del payload["unit_id"]
+    msg = _make_mqtt_msg("pms/telemetry/cmapss", payload)
+    msg.mid, msg.qos = 44, 1
+    order = []
+    bridge._kafka.send.side_effect = lambda *a, **kw: order.append("dead-letter")
+    client.ack.side_effect = lambda *a: order.append("ack") or 0
+    bridge._on_message(client, None, msg)
+    assert order == ["dead-letter", "ack"]
 
 
 # ---------------------------------------------------------------------------
@@ -191,14 +236,14 @@ class TestOnMessageRouting:
     def test_cmapss_message_routed_to_sensor_telemetry(self):
         from mqtt_bridge import SENSOR_TOPIC
         bridge = _make_bridge()
-        bridge._on_message(None, None, _make_mqtt_msg("pms/telemetry/cmapss", _cmapss_payload()))
+        bridge._route_message(_make_mqtt_msg("pms/telemetry/cmapss", _cmapss_payload()))
         topic_called = bridge._kafka.send.call_args[0][0]
         assert topic_called == SENSOR_TOPIC
 
     def test_ims_message_routed_to_bearing_telemetry(self):
         from mqtt_bridge import BEARING_TOPIC
         bridge = _make_bridge()
-        bridge._on_message(None, None, _make_mqtt_msg("pms/telemetry/ims", _ims_payload()))
+        bridge._route_message(_make_mqtt_msg("pms/telemetry/ims", _ims_payload()))
         topic_called = bridge._kafka.send.call_args[0][0]
         assert topic_called == BEARING_TOPIC
 
@@ -208,7 +253,7 @@ class TestOnMessageRouting:
         bad_msg = MagicMock()
         bad_msg.topic = "pms/telemetry/cmapss"
         bad_msg.payload = b"{not json}"
-        bridge._on_message(None, None, bad_msg)
+        bridge._route_message(bad_msg)
         topics_called = [c[0][0] for c in bridge._kafka.send.call_args_list]
         assert DEAD_LETTER_TOPIC in topics_called
 
@@ -216,7 +261,7 @@ class TestOnMessageRouting:
         from mqtt_bridge import DEAD_LETTER_TOPIC
         bridge = _make_bridge()
         bad = _cmapss_payload(); del bad["unit_id"]
-        bridge._on_message(None, None, _make_mqtt_msg("pms/telemetry/cmapss", bad))
+        bridge._route_message(_make_mqtt_msg("pms/telemetry/cmapss", bad))
         topics_called = [c[0][0] for c in bridge._kafka.send.call_args_list]
         assert DEAD_LETTER_TOPIC in topics_called
 
@@ -224,31 +269,31 @@ class TestOnMessageRouting:
         from mqtt_bridge import DEAD_LETTER_TOPIC
         bridge = _make_bridge()
         bad = _ims_payload(); del bad["bearing_name"]
-        bridge._on_message(None, None, _make_mqtt_msg("pms/telemetry/ims", bad))
+        bridge._route_message(_make_mqtt_msg("pms/telemetry/ims", bad))
         topics_called = [c[0][0] for c in bridge._kafka.send.call_args_list]
         assert DEAD_LETTER_TOPIC in topics_called
 
     def test_unrouted_topic_routed_to_dead_letter(self):
         from mqtt_bridge import DEAD_LETTER_TOPIC
         bridge = _make_bridge()
-        bridge._on_message(None, None, _make_mqtt_msg("pms/unknown/topic", _cmapss_payload()))
+        bridge._route_message(_make_mqtt_msg("pms/unknown/topic", _cmapss_payload()))
         topics_called = [c[0][0] for c in bridge._kafka.send.call_args_list]
         assert DEAD_LETTER_TOPIC in topics_called
 
     def test_valid_cmapss_increments_forwarded_counter(self):
         bridge = _make_bridge()
-        bridge._on_message(None, None, _make_mqtt_msg("pms/telemetry/cmapss", _cmapss_payload()))
+        bridge._route_message(_make_mqtt_msg("pms/telemetry/cmapss", _cmapss_payload()))
         assert bridge._stats["cmapss_forwarded"] == 1
 
     def test_valid_ims_increments_forwarded_counter(self):
         bridge = _make_bridge()
-        bridge._on_message(None, None, _make_mqtt_msg("pms/telemetry/ims", _ims_payload()))
+        bridge._route_message(_make_mqtt_msg("pms/telemetry/ims", _ims_payload()))
         assert bridge._stats["ims_forwarded"] == 1
 
     def test_invalid_message_increments_dead_lettered_counter(self):
         bridge = _make_bridge()
         bad = _cmapss_payload(); del bad["unit_id"]
-        bridge._on_message(None, None, _make_mqtt_msg("pms/telemetry/cmapss", bad))
+        bridge._route_message(_make_mqtt_msg("pms/telemetry/cmapss", bad))
         assert bridge._stats["dead_lettered"] == 1
 
     def test_malformed_json_increments_parse_errors_counter(self):
@@ -256,12 +301,12 @@ class TestOnMessageRouting:
         bad = MagicMock()
         bad.topic = "pms/telemetry/cmapss"
         bad.payload = b"{bad"
-        bridge._on_message(None, None, bad)
+        bridge._route_message(bad)
         assert bridge._stats["parse_errors"] == 1
 
     def test_cmapss_kafka_key_format(self):
         bridge = _make_bridge()
-        bridge._on_message(None, None, _make_mqtt_msg("pms/telemetry/cmapss", _cmapss_payload()))
+        bridge._route_message(_make_mqtt_msg("pms/telemetry/cmapss", _cmapss_payload()))
         key_used = bridge._kafka.send.call_args[1].get("key") or bridge._kafka.send.call_args[0][2] if len(bridge._kafka.send.call_args[0]) > 2 else None
         # Key must contain dataset_id and unit_id
         # Accept either positional or keyword form
@@ -272,20 +317,20 @@ class TestOnMessageRouting:
 
     def test_ims_kafka_key_contains_bearing_name(self):
         bridge = _make_bridge()
-        bridge._on_message(None, None, _make_mqtt_msg("pms/telemetry/ims", _ims_payload()))
+        bridge._route_message(_make_mqtt_msg("pms/telemetry/ims", _ims_payload()))
         all_str = str(bridge._kafka.send.call_args)
         assert "bearing_1" in all_str
 
-    def test_dead_letter_send_failure_does_not_raise(self):
+    def test_dead_letter_send_failure_raises(self):
         bridge = _make_bridge()
         bridge._kafka.send.side_effect = Exception("broker down")
         bad = _cmapss_payload(); del bad["unit_id"]
-        bridge._on_message(None, None, _make_mqtt_msg("pms/telemetry/cmapss", bad))
-        # Should log the error but not raise
+        with pytest.raises(Exception, match="broker down"):
+            bridge._route_message(_make_mqtt_msg("pms/telemetry/cmapss", bad))
 
     def test_event_id_preserved_in_forwarded_payload(self):
         bridge = _make_bridge()
         p = _cmapss_payload(event_id="my-unique-event-id")
-        bridge._on_message(None, None, _make_mqtt_msg("pms/telemetry/cmapss", p))
+        bridge._route_message(_make_mqtt_msg("pms/telemetry/cmapss", p))
         payload_sent = bridge._kafka.send.call_args[0][1]
         assert payload_sent["event_id"] == "my-unique-event-id"

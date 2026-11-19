@@ -1,0 +1,61 @@
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on: [zookeeper]
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    volumes:
+      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+  influxdb:
+    image: influxdb:2.7
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: testuser
+      DOCKER_INFLUXDB_INIT_PASSWORD: isolated-test-password
+      DOCKER_INFLUXDB_INIT_ORG: module2-test
+      DOCKER_INFLUXDB_INIT_BUCKET: module2-test
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: module2-isolated-test-token
+  bridge:
+    image: pms-ingestion-reliability-test-consumer:latest
+    restart: on-failure
+    command: python /app/src/mqtt_bridge.py
+    volumes:
+      - ./ingestion/src:/app/src:ro
+    environment:
+      KAFKA_BROKER: kafka:9092
+      MQTT_BROKER: mosquitto
+      MQTT_CLIENT_ID: module2-verification-bridge
+      MQTT_QOS: 1
+      SENSOR_TOPIC: m2-test-sensor
+      DEAD_LETTER_TOPIC: m2-test-dead-letter
+      BEARING_TOPIC: m2-test-bearing
+    depends_on: [kafka, mosquitto]
+  consumer:
+    image: pms-ingestion-reliability-test-consumer:latest
+    restart: on-failure
+    command: python /app/src/kafka_consumer.py
+    volumes:
+      - ./ingestion/src:/app/src:ro
+    environment:
+      MODULE2_TEST_GUARD: isolated-module2-verification
+      KAFKA_BROKER: kafka:9092
+      SENSOR_TOPIC: m2-test-sensor
+      DEAD_LETTER_TOPIC: m2-test-dead-letter
+      CONSUMER_GROUP: m2-test-writer
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: module2-isolated-test-token
+      INFLUXDB_ORG: module2-test
+      INFLUXDB_BUCKET: module2-test
+    depends_on: [kafka, influxdb]
