@@ -138,7 +138,7 @@ The slides below summarise the full system. Open the [full presentation](https:/
 | # | Module | Description | Documentation | Status |
 |---|---|---|---|---|
 | 01 | **IoT Simulation** | NASA C-MAPSS and IMS dataset simulation, MQTT publishing, Kafka integration and telemetry event management | [Notion guide](https://app.notion.com/p/ghulammustafa/Module-01-IoT-Simulation-41a6c3c1abf18095839fe060beb29214) · [Baseline](docs/MODULE1_BASELINE.md) · [Architecture](docs/MODULE1_ARCHITECTURE.md) · [Verification report](docs/MODULE1_FINAL_VERIFICATION_REPORT.md) | ✅ Verified core baseline |
-| 02 | Kafka Ingestion & MQTT Bridge | C-MAPSS ingestion to InfluxDB; MQTT bridge also routes IMS events to Kafka | [Architecture](docs/MODULE2_ARCHITECTURE.md) · [User guide](docs/MODULE2_USER_GUIDE.md) · [Verification](docs/MODULE2_VERIFICATION_REPORT.md) | ✅ C-MAPSS scope verified; IMS storage planned |
+| 02 | Kafka Ingestion & MQTT Bridge | C-MAPSS ingestion to InfluxDB; MQTT bridge also routes IMS events to Kafka | [Baseline](docs/MODULE2_BASELINE.md) · [Architecture](docs/MODULE2_ARCHITECTURE.md) · [Verification report](docs/MODULE2_VERIFICATION_REPORT.md) · [User guide](docs/MODULE2_USER_GUIDE.md) | ✅ C-MAPSS baseline frozen; IMS storage planned |
 | 03 | InfluxDB Storage | Time-series storage for raw sensor readings with tag-based queries | [Architecture](docs/ARCHITECTURE.md) | ✅ Completed |
 | 04 | Data Preprocessing | Min-Max normalisation, sliding window assembly, RUL label assignment | [Architecture](docs/ARCHITECTURE.md) | ✅ Completed |
 | 05 | Feature Engineering | Sensor selection, EWMA smoothing, feature store | [Architecture](docs/ARCHITECTURE.md) | ✅ Completed |
