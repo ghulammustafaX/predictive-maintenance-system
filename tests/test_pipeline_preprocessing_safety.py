@@ -83,7 +83,20 @@ class PreprocessingSafetyTests(unittest.TestCase):
         consumer = Consumer({0: 2, 1: 2})
         producer = Producer({b'input:0:0'})
         self.execute(consumer, producer)
-        self.assertEqual(consumer.commits, [(1, 1), (1, 2), (0, 1), (0, 2)])
+        # Commits within each partition must be strictly ordered. Scheduling
+        # across *independent* partitions may interleave after retry backoff,
+        # depending on runner load, and is not a correctness requirement.
+        self.assertEqual(
+            [offset for partition, offset in consumer.commits if partition == 0],
+            [1, 2],
+        )
+        self.assertEqual(
+            [offset for partition, offset in consumer.commits if partition == 1],
+            [1, 2],
+        )
+        # The healthy partition must make durable progress while the failed
+        # partition's first delivery is still awaiting a successful retry.
+        self.assertLess(consumer.commits.index((1, 1)), consumer.commits.index((0, 1)))
         self.assertEqual([key for key, _ in producer.sent].count(b'input:0:0'), 2)
 
     def test_middle_failure_does_not_commit_past_gap(self):
