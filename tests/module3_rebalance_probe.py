@@ -118,6 +118,13 @@ def group_state(admin: KafkaAdminClient) -> tuple[str, int]:
 
 
 def publish_p0(client) -> None:
+    for name in (
+        "influx_write_acknowledged",
+        "peer_joined_during_processing",
+        "stale_commit_rejected",
+        "stale_commit_unexpectedly_succeeded",
+    ):
+        (COORDINATION / name).unlink(missing_ok=True)
     committed, ends = offsets()
     assert ends == {0: 0, 1: 0}, f"Expected empty two-partition topic, got {ends}"
     assert committed == {0: None, 1: None}, f"Unexpected pre-existing group offsets: {committed}"
