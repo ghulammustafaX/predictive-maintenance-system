@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from influxdb_client import InfluxDBClient
-from kafka import KafkaAdminClient, KafkaConsumer, KafkaProducer
+from kafka import KafkaConsumer, KafkaProducer
 from kafka.structs import TopicPartition
 
 EXPECTED = {
@@ -73,13 +73,20 @@ from(bucket: "{BUCKET}")
 
 
 def committed_offset() -> int | None:
-    admin = KafkaAdminClient(bootstrap_servers=BROKER, request_timeout_ms=10000)
+    # Explicit partition assignment does not join/rebalance the writer's group.
+    # kafka-python KafkaConsumer.committed() queries the group's broker offset.
+    observer = KafkaConsumer(
+        bootstrap_servers=BROKER,
+        group_id=GROUP,
+        enable_auto_commit=False,
+        request_timeout_ms=10000,
+    )
     try:
-        result = admin.list_consumer_group_offsets(GROUP)
-        meta = result.get(TopicPartition(TOPIC, 0))
-        return None if meta is None else meta.offset
+        partition = TopicPartition(TOPIC, 0)
+        observer.assign([partition])
+        return observer.committed(partition)
     finally:
-        admin.close()
+        observer.close()
 
 
 def dlq_received() -> bool:
@@ -130,10 +137,14 @@ def main() -> None:
             sensor_rows = query_rows(client, "sensor_21")
             try:
                 offset = committed_offset()
+            except Exception as exc:
+                print("Waiting for committed offset:", repr(exc), flush=True)
+                offset = None
+            try:
                 dlq_ok = dlq_received()
             except Exception as exc:
-                print("Waiting for Kafka state:", type(exc).__name__)
-                offset, dlq_ok = None, False
+                print("Waiting for dead-letter record:", repr(exc), flush=True)
+                dlq_ok = False
             last_state = (len(rows), len(sensor_rows), offset, dlq_ok)
             if len(rows) == 3 and len(sensor_rows) == 3 and offset == 5 and dlq_ok:
                 break
