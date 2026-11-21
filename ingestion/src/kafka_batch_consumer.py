@@ -29,6 +29,8 @@ MAX_BATCH_SIZE = 200
 CONFIRM = "opt-in-isolated-batch-worker"
 RETRY_BASE_SECONDS = float(os.getenv("PMS_PARTITION_RETRY_BASE_SECONDS", "1"))
 RETRY_MAX_SECONDS = float(os.getenv("PMS_PARTITION_RETRY_MAX_SECONDS", "30"))
+ALERT_RETRY_THRESHOLD = int(os.getenv("PMS_PARTITION_ALERT_RETRY_THRESHOLD", "3"))
+ALERT_AGE_SECONDS = float(os.getenv("PMS_PARTITION_ALERT_AGE_SECONDS", "60"))
 
 
 def require_safe_config() -> None:
@@ -40,6 +42,8 @@ def require_safe_config() -> None:
         raise ValueError("KAFKA_MAX_POLL_RECORDS must be >= PMS_INFLUX_BATCH_SIZE")
     if RETRY_BASE_SECONDS <= 0 or RETRY_MAX_SECONDS < RETRY_BASE_SECONDS:
         raise ValueError("Partition retry backoff must be positive and max >= base")
+    if ALERT_RETRY_THRESHOLD < 1 or ALERT_AGE_SECONDS <= 0:
+        raise ValueError("Partition alert thresholds must be positive")
 
 
 def persist_points(write_api: Any, points: Sequence[Any]) -> None:
@@ -132,6 +136,8 @@ class PartitionProgress:
     retry_at: float = 0.0
     failure_paused: bool = False
     backpressure_paused: bool = False
+    failure_started_at: float | None = None
+    alert_emitted: bool = False
 
 
 class PartitionIsolatingBatchWorker(ConsumerRebalanceListener):
@@ -153,11 +159,15 @@ class PartitionIsolatingBatchWorker(ConsumerRebalanceListener):
         retry_base_seconds: float = RETRY_BASE_SECONDS,
         retry_max_seconds: float = RETRY_MAX_SECONDS,
         clock: Any = time.monotonic,
+        alert_retry_threshold: int = ALERT_RETRY_THRESHOLD,
+        alert_age_seconds: float = ALERT_AGE_SECONDS,
     ) -> None:
         if not 2 <= batch_size <= MAX_BATCH_SIZE:
             raise ValueError("Invalid batch size")
         if retry_base_seconds <= 0 or retry_max_seconds < retry_base_seconds:
             raise ValueError("Invalid partition retry backoff")
+        if alert_retry_threshold < 1 or alert_age_seconds <= 0:
+            raise ValueError("Invalid partition alert threshold")
         self.consumer = consumer
         self.write_api = write_api
         self.dlq_producer = dlq_producer
@@ -168,12 +178,21 @@ class PartitionIsolatingBatchWorker(ConsumerRebalanceListener):
         self.partitions: dict[TopicPartition, PartitionProgress] = {}
         self.completed_records = 0
         self._next_partition_index = 0
+        self.alert_retry_threshold = alert_retry_threshold
+        self.alert_age_seconds = alert_age_seconds
+        # Counters remain in memory, never write to Kafka/InfluxDB from observability.
+        self.failures_by_stage: dict[str, int] = {}
+        self.alerts_emitted = 0
+        self.recoveries = 0
+        self.revocations_with_pending_work = 0
 
     def on_partitions_revoked(self, revoked: Sequence[TopicPartition]) -> None:
         """Drop uncommitted local work before Kafka transfers ownership."""
         for tp in revoked:
             progress = self.partitions.pop(tp, None)
             if progress is not None:
+                if progress.records or progress.pending is not None:
+                    self.revocations_with_pending_work += 1
                 queued = len(progress.records)
                 stage = progress.pending.stage if progress.pending else "queued"
                 logger.warning(
@@ -226,11 +245,16 @@ class PartitionIsolatingBatchWorker(ConsumerRebalanceListener):
             if progress.pending is None and progress.records:
                 progress.pending = self._prepare_pending(progress)
             if progress.pending is None or now < progress.retry_at:
+                self._emit_alert_if_needed(tp, progress, now)
                 self._sync_pause(tp, progress)
                 continue
             try:
                 self._advance_pending(tp, progress)
             except Exception:
+                stage = progress.pending.stage if progress.pending else "unknown"
+                self.failures_by_stage[stage] = self.failures_by_stage.get(stage, 0) + 1
+                if progress.failure_started_at is None:
+                    progress.failure_started_at = self.clock()
                 progress.retry_attempt += 1
                 delay = min(
                     self.retry_base_seconds * (2 ** (progress.retry_attempt - 1)),
@@ -238,6 +262,7 @@ class PartitionIsolatingBatchWorker(ConsumerRebalanceListener):
                 )
                 progress.retry_at = self.clock() + delay
                 progress.failure_paused = True
+                self._emit_alert_if_needed(tp, progress, self.clock())
                 logger.exception(
                     "Partition operation failed; pausing only this partition "
                     "topic=%s partition=%s stage=%s attempt=%d retry_in_seconds=%.3f",
@@ -247,9 +272,18 @@ class PartitionIsolatingBatchWorker(ConsumerRebalanceListener):
                 )
             else:
                 if progress.pending is None:
+                    if progress.failure_started_at is not None:
+                        elapsed = max(0.0, self.clock() - progress.failure_started_at)
+                        self.recoveries += 1
+                        logger.info(
+                            "M3_PARTITION_RECOVERED topic=%s partition=%s retries=%d downtime_seconds=%.3f alert_emitted=%s",
+                            tp.topic, tp.partition, progress.retry_attempt, elapsed, progress.alert_emitted,
+                        )
                     progress.retry_attempt = 0
                     progress.retry_at = 0.0
                     progress.failure_paused = False
+                    progress.failure_started_at = None
+                    progress.alert_emitted = False
             progress.backpressure_paused = len(progress.records) >= self.batch_size
             self._sync_pause(tp, progress)
             processed += 1
@@ -257,6 +291,61 @@ class PartitionIsolatingBatchWorker(ConsumerRebalanceListener):
             if max_partitions is not None and processed >= max_partitions:
                 break
         return processed
+
+    def _emit_alert_if_needed(self, tp: TopicPartition, progress: PartitionProgress, now: float) -> None:
+        """Emit one actionable warning per unresolved failure incident."""
+        started = progress.failure_started_at
+        if started is None or progress.alert_emitted is True:
+            return
+        age = max(0.0, now - started)
+        if progress.retry_attempt < self.alert_retry_threshold and age < self.alert_age_seconds:
+            return
+        progress.alert_emitted = True
+        self.alerts_emitted += 1
+        logger.warning(
+            "M3_PARTITION_ALERT topic=%s partition=%s stage=%s retries=%d failure_age_seconds=%.3f queued_records=%d",
+            tp.topic, tp.partition,
+            progress.pending.stage if progress.pending else "unknown",
+            progress.retry_attempt, age, len(progress.records),
+        )
+
+    def metrics_snapshot(self) -> dict[str, Any]:
+        """Return bounded in-memory operational metrics without external I/O.
+
+        This snapshot reports local queue depth and retry state, not broker lag.
+        Kafka committed/end offsets must be measured separately to determine lag.
+        """
+        now = self.clock()
+        states = []
+        for tp, progress in sorted(
+            self.partitions.items(), key=lambda item: (item[0].topic, item[0].partition)
+        ):
+            age = (
+                max(0.0, now - progress.failure_started_at)
+                if progress.failure_started_at is not None else 0.0
+            )
+            states.append({
+                "topic": tp.topic,
+                "partition": tp.partition,
+                "stage": progress.pending.stage if progress.pending else "idle",
+                "queued_records": len(progress.records),
+                "retry_attempt": progress.retry_attempt,
+                "retry_wait_seconds": max(0.0, progress.retry_at - now),
+                "failure_age_seconds": round(age, 3),
+                "failure_paused": progress.failure_paused,
+                "backpressure_paused": progress.backpressure_paused,
+                "alert_emitted": progress.alert_emitted,
+            })
+        return {
+            "completed_records": self.completed_records,
+            "total_failures_by_stage": dict(sorted(self.failures_by_stage.items())),
+            "alerts_emitted": self.alerts_emitted,
+            "recoveries": self.recoveries,
+            "revocations_with_pending_work": self.revocations_with_pending_work,
+            "failing_partitions": sum(state["failure_paused"] for state in states),
+            "queued_records": sum(state["queued_records"] for state in states),
+            "partitions": states,
+        }
 
     def _prepare_pending(self, progress: PartitionProgress) -> PendingBatch:
         valid_messages: list[Any] = []
