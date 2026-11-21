@@ -2,7 +2,7 @@
 Phase 3: Real preprocessing service schema compatibility and RUL isolation.
 
 Tests the ACTUAL StreamingPreprocessor.transform() against Module 1 payloads.
-No live Kafka or Docker required — uses the real scaler artifacts from disk.
+No live Kafka or Docker required — uses deterministic synthetic scaler fixtures.
 
 Verifies:
   - New envelope fields (event_id, asset_id, sequence, schema_version) are
@@ -114,7 +114,6 @@ class TestSchemaCompatibility:
         assert run_id     == "test_run_01"
         assert cycle      == 1
 
-    @SKIP_NO_ARTIFACTS
     def test_envelope_fields_not_required_by_preprocessor(self) -> None:
         """event_id, asset_id, sequence, schema_version are IGNORED by preprocessing."""
         from ml.streaming.preprocessing import StreamingPreprocessor
@@ -129,7 +128,6 @@ class TestSchemaCompatibility:
         result = StreamingPreprocessor._validate_message(payload)
         assert result[0] == "FD001"   # still accepted
 
-    @SKIP_NO_ARTIFACTS
     def test_missing_dataset_id_raises(self) -> None:
         from ml.streaming.preprocessing import StreamingPreprocessor
         payload = _make_payload()
@@ -137,7 +135,6 @@ class TestSchemaCompatibility:
         with pytest.raises(ValueError, match="dataset_id"):
             StreamingPreprocessor._validate_message(payload)
 
-    @SKIP_NO_ARTIFACTS
     def test_missing_time_cycles_raises(self) -> None:
         from ml.streaming.preprocessing import StreamingPreprocessor
         payload = _make_payload()
@@ -152,7 +149,6 @@ class TestSchemaCompatibility:
 
 class TestPreprocessingOutputSchema:
 
-    @SKIP_NO_ARTIFACTS
     def test_transform_returns_expected_fields(self) -> None:
         sp = _make_preprocessor()
         payload = _make_payload(unit_id=1, cycle=1)
@@ -168,20 +164,17 @@ class TestPreprocessingOutputSchema:
             f"Missing fields: {required_output_fields - result.keys()}"
         )
 
-    @SKIP_NO_ARTIFACTS
     def test_transform_output_preserves_run_id(self) -> None:
         sp = _make_preprocessor()
         payload = _make_payload(run_id="my_run_id_xyz")
         result = sp.transform(payload)
         assert result["run_id"] == "my_run_id_xyz"
 
-    @SKIP_NO_ARTIFACTS
     def test_transform_output_preserves_dataset_id(self) -> None:
         sp = _make_preprocessor()
         result = sp.transform(_make_payload())
         assert result["dataset_id"] == "FD001"
 
-    @SKIP_NO_ARTIFACTS
     def test_transform_output_preserves_timestamp(self) -> None:
         from datetime import datetime
         sp = _make_preprocessor()
@@ -190,7 +183,6 @@ class TestPreprocessingOutputSchema:
         result = sp.transform(payload)
         assert result["timestamp"] == ts_original
 
-    @SKIP_NO_ARTIFACTS
     def test_features_are_list_of_floats(self) -> None:
         sp = _make_preprocessor()
         result = sp.transform(_make_payload(cycle=1))
@@ -200,7 +192,6 @@ class TestPreprocessingOutputSchema:
         assert all(isinstance(v, float) for v in feats)
         assert all(np.isfinite(v) for v in feats)
 
-    @SKIP_NO_ARTIFACTS
     def test_feature_order_matches_expected_columns(self) -> None:
         """feature_order must match ml.data.preprocessing.FEATURE_COLUMNS."""
         from ml.data.preprocessing import FEATURE_COLUMNS
@@ -209,7 +200,6 @@ class TestPreprocessingOutputSchema:
         assert result["feature_order"] == list(FEATURE_COLUMNS)
         assert len(result["features"]) == len(FEATURE_COLUMNS)
 
-    @SKIP_NO_ARTIFACTS
     def test_envelope_fields_stripped_from_output(self) -> None:
         """
         DOCUMENTED BEHAVIOUR: preprocessing output does NOT include
@@ -239,7 +229,6 @@ class TestPreprocessingOutputSchema:
 
 class TestRULLabelIsolation:
 
-    @SKIP_NO_ARTIFACTS
     def test_rul_not_included_in_feature_columns(self) -> None:
         """'rul' must not appear in FEATURE_COLUMNS used by the preprocessor."""
         from ml.data.preprocessing import FEATURE_COLUMNS
@@ -247,7 +236,6 @@ class TestRULLabelIsolation:
             "FAIL: 'rul' is in FEATURE_COLUMNS — this would leak ground truth into features"
         )
 
-    @SKIP_NO_ARTIFACTS
     def test_training_payload_with_rul_does_not_inject_rul_into_features(self) -> None:
         """When payload contains 'rul', the preprocessor must not use it as a feature."""
         from ml.data.preprocessing import FEATURE_COLUMNS
@@ -262,7 +250,6 @@ class TestRULLabelIsolation:
         # 'rul' is not in feature_order
         assert "rul" not in result["feature_order"]
 
-    @SKIP_NO_ARTIFACTS
     def test_rul_key_not_in_preprocessing_output(self) -> None:
         """The preprocessing output dict must not contain a 'rul' key."""
         sp = _make_preprocessor()
@@ -272,7 +259,6 @@ class TestRULLabelIsolation:
             "FAIL: 'rul' field appeared in preprocessing output"
         )
 
-    @SKIP_NO_ARTIFACTS
     def test_inference_feature_allowlist_covers_all_expected_columns(self) -> None:
         """
         The effective inference allowlist is FEATURE_COLUMNS in
@@ -294,7 +280,6 @@ class TestRULLabelIsolation:
 
 class TestPreprocessingDuplicateHandling:
 
-    @SKIP_NO_ARTIFACTS
     def test_duplicate_cycle_returns_none(self) -> None:
         """Preprocessing silently drops duplicate cycles (cycle <= last_cycle)."""
         sp = _make_preprocessor()
@@ -307,7 +292,6 @@ class TestPreprocessingDuplicateHandling:
             "'if cycle <= state.last_cycle: return None'"
         )
 
-    @SKIP_NO_ARTIFACTS
     def test_out_of_order_cycle_returns_none(self) -> None:
         """Preprocessing silently drops out-of-order cycles."""
         sp = _make_preprocessor()
@@ -317,7 +301,6 @@ class TestPreprocessingDuplicateHandling:
         r_ooo = sp.transform(_make_payload(cycle=2, run_id="r"))  # OOO
         assert r_ooo is None, "OOO cycle must be dropped by preprocessing"
 
-    @SKIP_NO_ARTIFACTS
     def test_different_run_id_starts_fresh(self) -> None:
         """A new run_id produces a fresh state; cycle=1 is accepted."""
         sp = _make_preprocessor()

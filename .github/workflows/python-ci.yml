@@ -42,8 +42,16 @@ jobs:
             -r ml/prediction/requirements.txt
       - name: Run offline regression (broker tests run in the separate integration job)
         run: |
-          python -m pytest tests/ --ignore=tests/test_m1_integration.py -q -rs \
+          python -m pytest tests/ --deselect=tests/test_m1_integration.py::TestKafkaDirectDelivery --deselect=tests/test_m1_integration.py::TestMQTTBridge -q -rs \
             --junitxml=pytest-regression.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse("pytest-regression.xml").getroot()
+          suites = [root] if root.tag == "testsuite" else root.findall("testsuite")
+          assert suites, "Missing offline regression report"
+          skipped = sum(int(suite.attrib.get("skipped", "0")) for suite in suites)
+          assert skipped == 0, f"Offline regression unexpectedly skipped {skipped} tests"
+          PY
       - name: Publish regression test report
         if: always()
         uses: actions/upload-artifact@v4
@@ -71,7 +79,7 @@ jobs:
           python -m pip install pytest -r simulator/requirements.txt -r ingestion/requirements.txt
       - name: Start isolated Kafka, MQTT, and bridge
         run: |
-          docker compose -p pms-ci-m1 -f docker-compose.m1-integration-test.yml up -d --build \
+          docker compose -p pms-ci-m1 -f docker-compose.m1-integration-test.yml up -d --wait --wait-timeout 180 --build \
             zookeeper kafka mosquitto topic-init mqtt-bridge
       - name: Build isolated simulator test image
         run: docker compose -p pms-ci-m1 -f docker-compose.m1-integration-test.yml build simulator
@@ -125,7 +133,9 @@ jobs:
           PY
       - name: Save logs if broker tests fail
         if: failure()
-        run: docker compose -p pms-ci-m1 -f docker-compose.m1-integration-test.yml logs --no-color --tail=100
+        run: |
+          docker compose -p pms-ci-m1 -f docker-compose.m1-integration-test.yml ps -a
+          docker compose -p pms-ci-m1 -f docker-compose.m1-integration-test.yml logs --no-color --tail=100
       - name: Tear down only the isolated CI stack
         if: always()
         run: docker compose -p pms-ci-m1 -f docker-compose.m1-integration-test.yml down --remove-orphans
