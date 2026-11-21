@@ -25,6 +25,7 @@ for key, value in EXPECTED.items():
 
 COORDINATION = Path("/coordination")
 FAILURE_MARKER = COORDINATION / "partition0_write_failed"
+FAILURE_COUNT = COORDINATION / "partition0_failure_count"
 RELEASE_MARKER = COORDINATION / "release_partition0"
 
 sys.path.insert(0, "/app/src")
@@ -36,9 +37,12 @@ original_persist = batch.persist_points
 def fail_only_partition_zero(write_api, points):
     run_ids = {point._tags.get("run_id") for point in points}
     if "m3-partition-fault-p0" in run_ids and not RELEASE_MARKER.exists():
+        failures = int(FAILURE_COUNT.read_text(encoding="utf-8")) if FAILURE_COUNT.exists() else 0
+        failures += 1
+        FAILURE_COUNT.write_text(str(failures), encoding="utf-8")
         FAILURE_MARKER.touch(exist_ok=True)
-        print("M3_PARTITION_FAULT_P0_WRITE_INJECTED", flush=True)
-        raise TimeoutError("isolated test fault: partition 0 InfluxDB unavailable")
+        print(f"M3_PARTITION_FAULT_P0_WRITE_INJECTED attempt={failures}", flush=True)
+        raise TimeoutError("isolated test fault: repeated partition 0 InfluxDB unavailable")
     return original_persist(write_api, points)
 
 

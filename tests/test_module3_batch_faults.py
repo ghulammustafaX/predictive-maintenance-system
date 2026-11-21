@@ -265,3 +265,118 @@ def test_revocation_discards_uncommitted_partition_queue_for_new_owner_replay():
     assert tp0 in worker.partitions
     assert len(worker.partitions[tp0].records) == 0
     assert consumer.commit.call_count == 0
+
+
+def test_repeated_write_failures_keep_only_failed_partition_paused_until_recovery():
+    now = [0.0]
+    worker, consumer, writer, dlq, tp0, tp1, paused = _partition_worker(
+        clock=lambda: now[0]
+    )
+    p0_failures = [0]
+
+    def repeated_write_failure(**kwargs):
+        run_ids = {point._tags["run_id"] for point in kwargs["record"]}
+        if "repeat-write-p0" in run_ids and p0_failures[0] < 3:
+            p0_failures[0] += 1
+            raise TimeoutError(f"partition 0 transient write failure {p0_failures[0]}")
+
+    writer.write.side_effect = repeated_write_failure
+    worker.process_polled_records({
+        tp0: [_message_for_run(0, 0, "repeat-write-p0"), _message_for_run(1, 0, "repeat-write-p0")],
+        tp1: [_message_for_run(0, 1, "repeat-write-p1"), _message_for_run(1, 1, "repeat-write-p1")],
+    })
+
+    assert p0_failures[0] == 1
+    assert tp0 in paused and tp1 not in paused
+    assert _committed_partition_offsets(consumer) == [(1, 2)]
+
+    for retry_time, expected_failures in ((2.0, 2), (6.0, 3)):
+        now[0] = retry_time
+        worker.process_ready()
+        assert p0_failures[0] == expected_failures
+        assert tp0 in paused
+        assert _committed_partition_offsets(consumer) == [(1, 2)]
+
+    now[0] = 14.0
+    worker.process_ready()
+    assert tp0 not in paused
+    assert _committed_partition_offsets(consumer) == [(1, 2), (0, 2)]
+    assert worker.completed_records == 4
+    assert writer.write.call_count == 5
+
+
+def test_repeated_ambiguous_commit_failures_retry_commit_without_rewriting_points():
+    now = [0.0]
+    worker, consumer, writer, dlq, tp0, tp1, paused = _partition_worker(
+        clock=lambda: now[0]
+    )
+    p0_commit_failures = [0]
+    successful_commits = consumer._successful_commits
+
+    def repeated_commit_failure(offsets, timeout_ms):
+        tp, metadata = next(iter(offsets.items()))
+        if tp == tp0 and p0_commit_failures[0] < 3:
+            p0_commit_failures[0] += 1
+            raise TimeoutError(f"partition 0 ambiguous commit response {p0_commit_failures[0]}")
+        successful_commits.append((tp.partition, metadata.offset))
+
+    consumer.commit.side_effect = repeated_commit_failure
+    worker.process_polled_records({
+        tp0: [_message_for_run(0, 0, "repeat-commit-p0"), _message_for_run(1, 0, "repeat-commit-p0")],
+        tp1: [_message_for_run(0, 1, "repeat-commit-p1"), _message_for_run(1, 1, "repeat-commit-p1")],
+    })
+
+    assert p0_commit_failures[0] == 1
+    assert tp0 in paused and tp1 not in paused
+    assert writer.write.call_count == 2
+    assert _committed_partition_offsets(consumer) == [(1, 2)]
+
+    for retry_time, expected_failures in ((2.0, 2), (6.0, 3)):
+        now[0] = retry_time
+        worker.process_ready()
+        assert p0_commit_failures[0] == expected_failures
+        assert tp0 in paused
+        assert writer.write.call_count == 2
+        assert _committed_partition_offsets(consumer) == [(1, 2)]
+
+    now[0] = 14.0
+    worker.process_ready()
+    assert tp0 not in paused
+    assert writer.write.call_count == 2, "confirmed InfluxDB points must not be rewritten during commit retries"
+    assert _committed_partition_offsets(consumer) == [(1, 2), (0, 2)]
+    assert worker.completed_records == 4
+
+
+def test_repeated_dlq_ack_failures_do_not_commit_invalid_record_until_recovery():
+    now = [0.0]
+    worker, consumer, writer, dlq, tp0, tp1, paused = _partition_worker(
+        clock=lambda: now[0]
+    )
+    dlq.send.return_value.get.side_effect = [
+        TimeoutError("DLQ acknowledgement lost 1"),
+        TimeoutError("DLQ acknowledgement lost 2"),
+        TimeoutError("DLQ acknowledgement lost 3"),
+        None,
+    ]
+    worker.process_polled_records({
+        tp0: [_message_for_run(0, 0, "repeat-dlq-p0", valid=False)],
+        tp1: [_message_for_run(0, 1, "repeat-dlq-p1")],
+    })
+
+    assert tp0 in paused and tp1 not in paused
+    assert _committed_partition_offsets(consumer) == [(1, 1)]
+    assert writer.write.call_count == 1
+
+    for retry_time, expected_calls in ((2.0, 2), (6.0, 3)):
+        now[0] = retry_time
+        worker.process_ready()
+        assert dlq.send.call_count == expected_calls
+        assert tp0 in paused
+        assert _committed_partition_offsets(consumer) == [(1, 1)]
+
+    now[0] = 14.0
+    worker.process_ready()
+    assert tp0 not in paused
+    assert dlq.send.call_count == 4
+    assert _committed_partition_offsets(consumer) == [(1, 1), (0, 1)]
+    assert worker.completed_records == 2

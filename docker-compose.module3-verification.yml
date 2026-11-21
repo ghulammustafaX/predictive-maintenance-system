@@ -50,6 +50,8 @@ services:
         kafka-topics --bootstrap-server kafka:9092 --create --topic m3-inflight-telemetry --partitions 1 --replication-factor 1
         kafka-topics --bootstrap-server kafka:9092 --create --topic m3-rebalance-telemetry --partitions 2 --replication-factor 1
         kafka-topics --bootstrap-server kafka:9092 --create --topic m3-partition-fault-telemetry --partitions 2 --replication-factor 1
+        kafka-topics --bootstrap-server kafka:9092 --create --topic m3-load-legacy-telemetry --partitions 4 --replication-factor 1
+        kafka-topics --bootstrap-server kafka:9092 --create --topic m3-load-batch-telemetry --partitions 4 --replication-factor 1
 
   influxdb:
     image: influxdb:2.7
@@ -451,7 +453,100 @@ services:
       INFLUXDB_ORG: m3-isolated-org
       INFLUXDB_BUCKET: m3-isolated-bucket
 
+
+  # Test-only sustained-load comparison. Never referenced by production Compose.
+  load-legacy-worker:
+    build: ./ingestion
+    entrypoint: ["python", "/tests/module3_sustained_load_worker.py"]
+    restart: "no"
+    volumes:
+      - ./tests/module3_sustained_load_worker.py:/tests/module3_sustained_load_worker.py:ro
+      - m3-load-results:/results
+    depends_on:
+      topic-init:
+        condition: service_completed_successfully
+      influxdb:
+        condition: service_healthy
+    environment:
+      MODULE3_LOAD_GUARD: m3-isolated-sustained-load-only
+      MODULE3_LOAD_MODE: legacy
+      MODULE3_LOAD_EXPECTED_RECORDS: "3000"
+      MODULE3_LOAD_MAX_RUNTIME_SECONDS: "600"
+      MODULE3_LOAD_RESULTS_DIR: /results
+      KAFKA_BROKER: kafka:9092
+      SENSOR_TOPIC: m3-load-legacy-telemetry
+      DEAD_LETTER_TOPIC: m3-isolated-dead-letter
+      CONSUMER_GROUP: m3-load-legacy-group
+      KAFKA_MAX_POLL_RECORDS: "200"
+      KAFKA_MAX_POLL_INTERVAL_MS: "600000"
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: m3-isolated-token
+      INFLUXDB_ORG: m3-isolated-org
+      INFLUXDB_BUCKET: m3-isolated-bucket
+      INFLUX_MAX_WRITE_RETRIES: "3"
+      INFLUX_RETRY_BACKOFF_SECONDS: "0.1"
+      INFLUX_TIMEOUT_MS: "10000"
+
+  load-batch-worker:
+    build: ./ingestion
+    entrypoint: ["python", "/tests/module3_sustained_load_worker.py"]
+    restart: "no"
+    volumes:
+      - ./tests/module3_sustained_load_worker.py:/tests/module3_sustained_load_worker.py:ro
+      - m3-load-results:/results
+    depends_on:
+      topic-init:
+        condition: service_completed_successfully
+      influxdb:
+        condition: service_healthy
+    environment:
+      MODULE3_LOAD_GUARD: m3-isolated-sustained-load-only
+      MODULE3_LOAD_MODE: batch
+      MODULE3_LOAD_EXPECTED_RECORDS: "3000"
+      MODULE3_LOAD_MAX_RUNTIME_SECONDS: "600"
+      MODULE3_LOAD_RESULTS_DIR: /results
+      PMS_BATCH_WORKER_CONFIRM: opt-in-isolated-batch-worker
+      PMS_INFLUX_BATCH_SIZE: "20"
+      PMS_PARTITION_RETRY_BASE_SECONDS: "0.1"
+      PMS_PARTITION_RETRY_MAX_SECONDS: "1"
+      KAFKA_BROKER: kafka:9092
+      SENSOR_TOPIC: m3-load-batch-telemetry
+      DEAD_LETTER_TOPIC: m3-isolated-dead-letter
+      CONSUMER_GROUP: m3-load-batch-group
+      KAFKA_MAX_POLL_RECORDS: "200"
+      KAFKA_MAX_POLL_INTERVAL_MS: "600000"
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: m3-isolated-token
+      INFLUXDB_ORG: m3-isolated-org
+      INFLUXDB_BUCKET: m3-isolated-bucket
+      INFLUX_MAX_WRITE_RETRIES: "3"
+      INFLUX_RETRY_BACKOFF_SECONDS: "0.1"
+      INFLUX_TIMEOUT_MS: "10000"
+
+  load-verifier:
+    build: ./ingestion
+    entrypoint: ["python", "/tests/module3_sustained_load_probe.py"]
+    volumes:
+      - ./tests/module3_sustained_load_probe.py:/tests/module3_sustained_load_probe.py:ro
+      - m3-load-results:/results
+    depends_on:
+      topic-init:
+        condition: service_completed_successfully
+      influxdb:
+        condition: service_healthy
+    environment:
+      MODULE3_LOAD_PROBE_GUARD: m3-isolated-sustained-load-probe-only
+      MODULE3_LOAD_RECORDS: "3000"
+      MODULE3_LOAD_RATE_PER_SECOND: "200"
+      MODULE3_LOAD_RESULTS_DIR: /results
+      KAFKA_BROKER: kafka:9092
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: m3-isolated-token
+      INFLUXDB_ORG: m3-isolated-org
+      INFLUXDB_BUCKET: m3-isolated-bucket
+
 volumes:
+  m3-load-results:
   m3-rebalance-coordination:
   m3-partition-fault-coordination:
 
