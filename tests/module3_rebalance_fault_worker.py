@@ -1,9 +1,9 @@
-"""Test-only worker that exposes the real Kafka rebalance/commit boundary.
+"""Test-only worker coordinating a real Kafka rebalance after durable write.
 
-The underlying batch consumer and InfluxDB write function remain unchanged.
-The worker blocks only after the first synchronous write, until a second
-consumer has joined the same real Kafka group and the broker reports
-PreparingRebalance. Its subsequent commit must be rejected by the broker.
+The unchanged batch worker persists a three-record batch, pauses while a
+second member joins, then commits that already-persisted batch before its next
+poll completes reassignment. This verifies the safe write -> commit -> poll
+ordering, not a broker rejection during PreparingRebalance.
 """
 from __future__ import annotations
 
@@ -32,10 +32,22 @@ COORDINATION = Path("/coordination")
 COORDINATION.mkdir(parents=True, exist_ok=True)
 sys.path.insert(0, "/app/src")
 import kafka_batch_consumer as batch
+from kafka.admin import KafkaAdminClient
 
 original_persist = batch.persist_points
 original_commit = batch.commit_through
 blocked_once = False
+verified_commit = False
+
+
+def current_group_state() -> tuple[str, int]:
+    admin = KafkaAdminClient(bootstrap_servers=os.environ["KAFKA_BROKER"], request_timeout_ms=10000)
+    try:
+        description = admin.describe_groups([os.environ["CONSUMER_GROUP"]])[os.environ["CONSUMER_GROUP"]]
+        state = str(description.get("state", description.get("group_state", "")))
+        return state.replace("_", "").replace("-", "").lower(), len(description.get("members", []))
+    finally:
+        admin.close()
 
 
 def persist_then_wait(write_api, points):
@@ -52,24 +64,34 @@ def persist_then_wait(write_api, points):
         time.sleep(0.1)
     if not ready.exists():
         raise TimeoutError("Second consumer did not join during the in-flight write")
+    state, members = current_group_state()
+    if state != "preparingrebalance" or members < 2:
+        raise AssertionError(f"Expected broker PreparingRebalance with two members, got {state}/{members}")
     print("M3_REBALANCE_PEER_JOINED_WHILE_BATCH_PENDING", flush=True)
 
 
-def commit_and_record_rejection(consumer, message):
-    try:
+def commit_after_confirmed_write(consumer, message):
+    global verified_commit
+    if not verified_commit:
+        state, members = current_group_state()
+        if state != "preparingrebalance" or members < 2:
+            raise AssertionError(f"Commit was not attempted during observed rebalance: {state}/{members}")
         original_commit(consumer, message)
-    except Exception as exc:
-        name = type(exc).__name__
-        (COORDINATION / "stale_commit_rejected").write_text(name + "\n")
-        print(f"M3_REBALANCE_STALE_COMMIT_REJECTED={name}", flush=True)
-        raise
-    (COORDINATION / "stale_commit_unexpectedly_succeeded").write_text("unexpected\n")
-    print("M3_REBALANCE_STALE_COMMIT_UNEXPECTEDLY_SUCCEEDED", flush=True)
-    raise AssertionError("Kafka accepted the commit while the group was rebalancing")
+        verified_commit = True
+        (COORDINATION / "write_then_commit_confirmed").write_text(
+            f"topic={message.topic} partition={message.partition} next_offset={message.offset + 1}\n"
+        )
+        print(
+            f"M3_REBALANCE_COMMIT_SUCCEEDED_WHILE_PREPARING partition={message.partition} "
+            f"next_offset={message.offset + 1}",
+            flush=True,
+        )
+        return
+    original_commit(consumer, message)
 
 
 batch.persist_points = persist_then_wait
-batch.commit_through = commit_and_record_rejection
+batch.commit_through = commit_after_confirmed_write
 
 if __name__ == "__main__":
     batch.run()
