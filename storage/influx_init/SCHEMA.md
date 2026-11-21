@@ -63,7 +63,27 @@ Query-time `aggregateWindow` does **not** constitute scheduled or persisted down
 
 ## Retention and provisioning
 
-The present production Compose configuration initializes the configured bucket, but does **not** establish a repository-enforced 90-day retention policy. Actual retention depends on the existing bucket configuration. `storage/influx_init/setup.sh` is currently an empty placeholder and is not a provisioning implementation. Bucket policy, tasks, data migration and retention expiry require independent approval and isolated verification. Do not update or delete existing production buckets as part of a test.
+The production Compose configuration initializes the configured bucket on first setup, but does **not** automatically apply a 90-day retention period. **Existing production buckets and retention rules are not changed by this module.**
+
+`bucket_policy.py` and `setup.sh` are **standalone, operator-invoked tools**. They do not run as Docker initialization hooks or modify the main Compose stack.
+
+- With only `--bucket NAME --retention-seconds N`, the tool reads the existing organization and bucket, verifies the retention matches, and exits without mutation. A missing bucket or mismatch fails closed.
+- A missing bucket may be created only if both `--create-if-missing` and the exact-name environment confirmation `PMS_BUCKET_CREATE_CONFIRM=NAME` are supplied. Existing buckets are **never updated or deleted** even when this option is enabled.
+- `N=0` means infinite retention. Finite retention must be at least 3,600 seconds (one hour); an upper validation bound of ten 365-day years applies. No implicit 90-day default is applied.
+- For a newly provisioned 90-day bucket, `N=7776000`. Expiration can delete points based on their recorded timestamps. Do **not** apply this to an active existing bucket without explicit retention, archival, migration and rollback approval.
+
+Illustrative standalone commands after installing `storage/influx_init/requirements.txt` and configuring `INFLUXDB_URL`, `INFLUXDB_TOKEN` and `INFLUXDB_ORG` to point to an authorized, isolated instance:
+
+```sh
+# Read-only inspection; must match existing retention to succeed.
+python storage/influx_init/bucket_policy.py --bucket m3-isolated-bucket --retention-seconds 0
+
+# Explicit, new bucket creation only. No existing bucket is ever patched.
+PMS_BUCKET_CREATE_CONFIRM=m3-new-test python storage/influx_init/bucket_policy.py \\
+  --bucket m3-new-test --retention-seconds 7776000 --create-if-missing
+```
+
+These commands are examples, not approval for execution on production. The isolated CI probe creates throwaway, uniquely named buckets and verifies no-mutation behavior on the existing isolated telemetry bucket.
 
 ## Isolated verification
 

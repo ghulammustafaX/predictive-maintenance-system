@@ -163,6 +163,9 @@ jobs:
       - name: Verify bounded Flux queries against isolated real InfluxDB
         run: |
           docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml run --rm --no-deps query-verifier
+      - name: Verify isolated InfluxDB bucket retention provisioning
+        run: |
+          docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml run --rm --no-deps policy-verifier
       - name: Save isolated stack logs on failure
         if: failure()
         run: |

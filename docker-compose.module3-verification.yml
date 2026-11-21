@@ -117,3 +117,19 @@ services:
       INFLUXDB_ORG: m3-isolated-org
       INFLUXDB_BUCKET: m3-isolated-bucket
       DATABASE_URL: sqlite:////tmp/module3-query-verifier.sqlite
+
+  policy-verifier:
+    build: ./backend
+    entrypoint: ["python", "/tests/module3_bucket_policy_probe.py"]
+    volumes:
+      - ./tests/module3_bucket_policy_probe.py:/tests/module3_bucket_policy_probe.py:ro
+      - ./storage/influx_init/bucket_policy.py:/storage/bucket_policy.py:ro
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      MODULE3_POLICY_TEST_GUARD: isolated-m3-bucket-policy-only
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: m3-isolated-token
+      INFLUXDB_ORG: m3-isolated-org
+      INFLUXDB_BUCKET: m3-isolated-bucket
