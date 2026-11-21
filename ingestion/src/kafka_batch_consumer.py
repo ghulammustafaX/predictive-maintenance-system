@@ -16,6 +16,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from kafka.consumer.subscription_state import ConsumerRebalanceListener
 from kafka.errors import KafkaError
 from kafka.structs import OffsetAndMetadata, TopicPartition
 
@@ -133,7 +134,7 @@ class PartitionProgress:
     backpressure_paused: bool = False
 
 
-class PartitionIsolatingBatchWorker:
+class PartitionIsolatingBatchWorker(ConsumerRebalanceListener):
     """Pause/retry only the failing partition while polling all healthy ones.
 
     All KafkaConsumer calls, including poll, pause, resume, and commit, are
