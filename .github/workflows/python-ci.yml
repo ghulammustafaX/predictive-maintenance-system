@@ -230,15 +230,15 @@ jobs:
         run: |
           set -euo pipefail
           compose=(docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml)
-          "\${compose[@]}" up -d --no-deps --build load-legacy-worker load-batch-worker
-          "\${compose[@]}" run --rm --no-deps load-verifier publish
-          "\${compose[@]}" wait load-legacy-worker load-batch-worker
+          "${compose[@]}" up -d --no-deps --build load-legacy-worker load-batch-worker
+          "${compose[@]}" run --rm --no-deps load-verifier publish
+          "${compose[@]}" wait load-legacy-worker load-batch-worker
           for service in load-legacy-worker load-batch-worker; do
-            container_id=$("\${compose[@]}" ps -a -q "$service")
+            container_id=$("${compose[@]}" ps -a -q "$service")
             test -n "$container_id"
             test "$(docker inspect "$container_id" --format '{{.State.ExitCode}}')" = 0
           done
-          "\${compose[@]}" run --rm --no-deps load-verifier verify
+          "${compose[@]}" run --rm --no-deps load-verifier verify
       - name: Save isolated stack logs on failure
         if: failure()
         run: |
