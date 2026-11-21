@@ -27,7 +27,7 @@ Compare the accepted single-point Kafka consumer with the opt-in partition-isola
 | Batch consumer | Existing `PartitionIsolatingBatchWorker`, batch size 20 |
 | Persistence | Synchronous writes to the same isolated InfluxDB instance |
 
-The publisher sends paired records with the same sensor values and source timestamp to the two topics. The only intentional identity difference is the run/event identity needed to keep their InfluxDB points separate. It paces after each bounded burst rather than after every pair: this maintains the same target average while creating batches across the four partitions. Actual achieved rate is reported and can be lower when the broker or host is slower.
+The publisher sends paired records with the same sensor values and source timestamp to the two topics. The only intentional identity difference is the run/event identity needed to keep their InfluxDB points separate. It queues each bounded burst, waits for every Kafka delivery confirmation, and then paces to the same target average. This creates batches across the four partitions without treating unconfirmed sends as delivered. Actual achieved rate is reported and can be lower when the broker or host is slower.
 
 ## Measurements
 

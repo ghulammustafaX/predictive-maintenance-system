@@ -72,20 +72,24 @@ def publish() -> None:
         max_in_flight_requests_per_connection=1,
     )
     started = time.monotonic()
+    pending = []
     try:
         for sequence in range(1, RECORDS_PER_MODE + 1):
             timestamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
             for mode, topic in TOPICS.items():
-                producer.send(
+                pending.append(producer.send(
                     topic,
                     key=f"engine-1-{sequence}",
                     value=payload(mode, sequence, timestamp),
                     partition=(sequence - 1) % PARTITIONS,
-                ).get(timeout=15)
+                ))
             # Pace bounded bursts at the same long-run rate. Evenly spaced
             # individual sends can let a fast consumer flush single points,
             # failing to exercise batching despite the intended workload.
             if sequence % BURST_RECORDS == 0 or sequence == RECORDS_PER_MODE:
+                for delivery in pending:
+                    delivery.get(timeout=15)
+                pending.clear()
                 target = started + sequence / TARGET_RATE
                 remaining = target - time.monotonic()
                 if remaining > 0:

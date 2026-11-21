@@ -119,9 +119,10 @@ def test_publisher_paces_equal_bounded_bursts(monkeypatch, tmp_path):
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    sent, sleeps = [], []
+    sent, acknowledgments, sleeps = [], [], []
     clock = [0.0]
     def sleep(delay):
+        assert len(acknowledgments) == len(sent)
         sleeps.append((len(sent), delay))
         clock[0] += delay
     module.time = SimpleNamespace(monotonic=lambda: clock[0], sleep=sleep)
@@ -129,11 +130,12 @@ def test_publisher_paces_equal_bounded_bursts(monkeypatch, tmp_path):
         def __init__(self, **kwargs): pass
         def send(self, topic, **kwargs):
             sent.append((topic, kwargs["partition"], kwargs["value"]["sequence"]))
-            return SimpleNamespace(get=lambda timeout: None)
+            return SimpleNamespace(get=lambda timeout: acknowledgments.append(timeout))
         def flush(self, **kwargs): pass
         def close(self, **kwargs): pass
     module.KafkaProducer = Producer
     module.publish()
+    assert acknowledgments == [15] * 200
     assert [count for count, _ in sleeps] == [160, 200]
     assert sum(delay for _, delay in sleeps) == pytest.approx(0.5)
     for topic in module.TOPICS.values():
