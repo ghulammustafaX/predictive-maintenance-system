@@ -272,7 +272,7 @@ def extract_features(signal: np.ndarray, sampling_hz: int = 20480) -> dict[str, 
     peak_to_peak = peak_pos - peak_neg
 
     # Avoid division by zero
-    crest_factor = float(np.abs(peak_pos) / rms) if rms > 1e-12 else 0.0
+    crest_factor = float(max(abs(peak_pos), abs(peak_neg)) / rms) if rms > 1e-12 else 0.0
 
     # Kurtosis: E[(x-mean)^4] / std^4
     if std_val > 1e-12:
