@@ -103,3 +103,41 @@ def test_failed_persistence_does_not_record_success(monkeypatch):
     assert isinstance(error.value.__cause__, OSError)
     assert attempts == ["attempt"]
     assert batch.persist_points is persist
+
+
+def test_publisher_paces_equal_bounded_bursts(monkeypatch, tmp_path):
+    settings = {
+        "MODULE3_LOAD_PROBE_GUARD": "m3-isolated-sustained-load-probe-only",
+        "KAFKA_BROKER": "kafka:9092", "INFLUXDB_URL": "http://influxdb:8086",
+        "INFLUXDB_TOKEN": "m3-isolated-token", "INFLUXDB_ORG": "m3-isolated-org",
+        "INFLUXDB_BUCKET": "m3-isolated-bucket", "MODULE3_LOAD_RECORDS": "100",
+        "MODULE3_LOAD_RATE_PER_SECOND": "200", "MODULE3_LOAD_RESULTS_DIR": str(tmp_path),
+    }
+    for key, value in settings.items(): monkeypatch.setenv(key, value)
+    spec = importlib.util.spec_from_file_location(
+        "module3_load_probe_test", Path(__file__).with_name("module3_sustained_load_probe.py")
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    sent, sleeps = [], []
+    clock = [0.0]
+    def sleep(delay):
+        sleeps.append((len(sent), delay))
+        clock[0] += delay
+    module.time = SimpleNamespace(monotonic=lambda: clock[0], sleep=sleep)
+    class Producer:
+        def __init__(self, **kwargs): pass
+        def send(self, topic, **kwargs):
+            sent.append((topic, kwargs["partition"], kwargs["value"]["sequence"]))
+            return SimpleNamespace(get=lambda timeout: None)
+        def flush(self, **kwargs): pass
+        def close(self, **kwargs): pass
+    module.KafkaProducer = Producer
+    module.publish()
+    assert [count for count, _ in sleeps] == [160, 200]
+    assert sum(delay for _, delay in sleeps) == pytest.approx(0.5)
+    for topic in module.TOPICS.values():
+        records = [(partition, seq) for name, partition, seq in sent if name == topic]
+        assert len(records) == 100
+        assert [seq for _, seq in records] == list(range(1, 101))
+        assert [sum(partition == p for partition, _ in records) for p in range(4)] == [25] * 4

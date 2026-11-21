@@ -25,6 +25,7 @@ for key, value in EXPECTED.items():
         raise SystemExit(f"REFUSED: invalid sustained-load probe setting {key}")
 
 PARTITIONS = 4
+BURST_RECORDS = 80
 RECORDS_PER_MODE = int(os.environ.get("MODULE3_LOAD_RECORDS", "3000"))
 TARGET_RATE = float(os.environ.get("MODULE3_LOAD_RATE_PER_SECOND", "200"))
 RESULTS_DIR = Path(os.environ.get("MODULE3_LOAD_RESULTS_DIR", "/results"))
@@ -81,10 +82,14 @@ def publish() -> None:
                     value=payload(mode, sequence, timestamp),
                     partition=(sequence - 1) % PARTITIONS,
                 ).get(timeout=15)
-            target = started + sequence / TARGET_RATE
-            remaining = target - time.monotonic()
-            if remaining > 0:
-                time.sleep(remaining)
+            # Pace bounded bursts at the same long-run rate. Evenly spaced
+            # individual sends can let a fast consumer flush single points,
+            # failing to exercise batching despite the intended workload.
+            if sequence % BURST_RECORDS == 0 or sequence == RECORDS_PER_MODE:
+                target = started + sequence / TARGET_RATE
+                remaining = target - time.monotonic()
+                if remaining > 0:
+                    time.sleep(remaining)
             if sequence % 500 == 0:
                 print(f"M3_LOAD_PUBLISH_PROGRESS records_per_topic={sequence}", flush=True)
         producer.flush(timeout=30)
@@ -98,6 +103,7 @@ def publish() -> None:
         "actual_rate_per_topic": round(RECORDS_PER_MODE / max(elapsed, 0.001), 3),
         "elapsed_seconds": round(elapsed, 3),
         "partitions_per_topic": PARTITIONS,
+        "burst_records_per_mode": BURST_RECORDS,
         "topics": TOPICS,
         "run_ids": RUN_IDS,
     }
