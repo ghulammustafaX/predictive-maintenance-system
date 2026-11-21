@@ -19,6 +19,12 @@ services:
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: ["CMD-SHELL", "echo srvr | nc -w 2 127.0.0.1 2181 | grep -Eq '^Mode: (standalone|leader|follower)'"]
+      interval: 5s
+      timeout: 4s
+      retries: 24
+      start_period: 5s
     ports:
       - "32181:2181"
     networks:
@@ -29,7 +35,8 @@ services:
     image: confluentinc/cp-kafka:7.4.0
     container_name: pms-m1-test-kafka
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_healthy
     ports:
       - "39092:9092"
     environment:
@@ -47,7 +54,7 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "kafka-topics --bootstrap-server kafka:9092 --list 2>/dev/null || exit 1"]
       interval: 5s
-      timeout: 5s
+      timeout: 10s
       retries: 15
 
   # ─── TOPIC INIT ─────────────────────────────────────────────
