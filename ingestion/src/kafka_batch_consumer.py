@@ -8,6 +8,7 @@ partitions and group heartbeats.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -31,6 +32,7 @@ RETRY_BASE_SECONDS = float(os.getenv("PMS_PARTITION_RETRY_BASE_SECONDS", "1"))
 RETRY_MAX_SECONDS = float(os.getenv("PMS_PARTITION_RETRY_MAX_SECONDS", "30"))
 ALERT_RETRY_THRESHOLD = int(os.getenv("PMS_PARTITION_ALERT_RETRY_THRESHOLD", "3"))
 ALERT_AGE_SECONDS = float(os.getenv("PMS_PARTITION_ALERT_AGE_SECONDS", "60"))
+METRICS_LOG_SECONDS = float(os.getenv("PMS_PARTITION_METRICS_LOG_SECONDS", "60"))
 
 
 def require_safe_config() -> None:
@@ -44,6 +46,8 @@ def require_safe_config() -> None:
         raise ValueError("Partition retry backoff must be positive and max >= base")
     if ALERT_RETRY_THRESHOLD < 1 or ALERT_AGE_SECONDS <= 0:
         raise ValueError("Partition alert thresholds must be positive")
+    if METRICS_LOG_SECONDS < 0:
+        raise ValueError("Partition metrics log interval cannot be negative")
 
 
 def persist_points(write_api: Any, points: Sequence[Any]) -> None:
@@ -476,6 +480,7 @@ def run() -> None:
         producer = legacy.create_dead_letter_producer()
         worker = PartitionIsolatingBatchWorker(consumer, write_api, producer)
         consumer.subscribe(topics=[legacy.SENSOR_TOPIC], listener=worker)
+        next_metrics_log = time.monotonic() + METRICS_LOG_SECONDS
         logger.info(
             "Partition-isolating batch writer started batch_size=%s group=%s retry_base=%.2f retry_max=%.2f",
             BATCH_SIZE, legacy.CONSUMER_GROUP, RETRY_BASE_SECONDS, RETRY_MAX_SECONDS,
@@ -495,6 +500,9 @@ def run() -> None:
                 processed = worker.process_ready(max_partitions=1)
                 if not more and processed == 0:
                     break
+            if METRICS_LOG_SECONDS > 0 and time.monotonic() >= next_metrics_log:
+                logger.info("M3_PARTITION_METRICS %s", json.dumps(worker.metrics_snapshot(), sort_keys=True))
+                next_metrics_log = time.monotonic() + METRICS_LOG_SECONDS
             if worker.completed_records and worker.completed_records % 100 == 0:
                 logger.info("Completed source records=%d", worker.completed_records)
     except KeyboardInterrupt:
