@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
+import pytest
 from kafka.structs import TopicPartition
 
 from ml.data.preprocessing import FEATURE_COLUMNS
@@ -41,6 +42,9 @@ class _Consumer:
 
 def test_restart_keeps_engine_run_and_partition_histories_separate(tmp_path):
     path = Path('simulator/data/cmapss/train_FD001.txt')
+    scalers = Path('ml/saved_v2_a1/scalers')
+    if not path.is_file() or len(list(scalers.glob('scaler_FD00*.pkl'))) != 4:
+        pytest.skip('requires local C-MAPSS FD001 rows and all four preprocessing scaler artifacts')
     rows = pd.read_csv(path, sep=r'\s+', header=None, nrows=2)
     identities = [(0, '1', 'run-a'), (0, '2', 'run-a'), (1, '1', 'run-b')]
     records = [[], []]

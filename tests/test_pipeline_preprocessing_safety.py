@@ -74,6 +74,7 @@ class PreprocessingSafetyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, \
              patch.dict('os.environ', {'PREPROCESSING_RETRY_SECONDS': '0.1', 'PREPROCESSING_CHECKPOINT_PATH': str(Path(directory) / 'state.sqlite')}), \
              patch('ml.streaming.preprocessing.validate_checkpoint_path'), \
+             patch('ml.streaming.preprocessing.artifact_identity', return_value='isolated-unit-test-artifact'), \
              patch('ml.streaming.preprocessing.KafkaConsumer', return_value=consumer), \
              patch('ml.streaming.preprocessing.KafkaProducer', return_value=producer):
             worker.run()

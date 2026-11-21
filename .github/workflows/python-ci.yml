@@ -1,0 +1,136 @@
+name: PMS Python CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pms-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  regression:
+    name: Offline Python regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            simulator/requirements.txt
+            ingestion/requirements.txt
+            ml/requirements.txt
+            ml/streaming/requirements.txt
+            ml/prediction/requirements.txt
+      - name: Install project test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest \
+            -r simulator/requirements.txt \
+            -r ingestion/requirements.txt \
+            -r ml/requirements.txt \
+            -r ml/streaming/requirements.txt \
+            -r ml/prediction/requirements.txt
+      - name: Run full regression with offline broker tests explicitly skipped
+        run: python -m pytest tests/ -q -rs --junitxml=pytest-regression.xml
+      - name: Publish regression test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pms-regression-junit
+          path: pytest-regression.xml
+          if-no-files-found: ignore
+
+  broker-integration:
+    name: Isolated Kafka and MQTT integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            simulator/requirements.txt
+            ingestion/requirements.txt
+      - name: Install broker test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest -r simulator/requirements.txt -r ingestion/requirements.txt
+      - name: Start isolated Kafka, MQTT, and bridge
+        run: |
+          docker compose -p pms-ci-m1 -f docker-compose.m1-integration-test.yml up -d --build \
+            zookeeper kafka mosquitto topic-init mqtt-bridge
+      - name: Build isolated simulator test image
+        run: docker compose -p pms-ci-m1 -f docker-compose.m1-integration-test.yml build simulator
+      - name: Verify brokers from inside the isolated Docker network
+        run: |
+          docker compose -p pms-ci-m1 -f docker-compose.m1-integration-test.yml run --rm --no-deps \
+            --entrypoint python \
+            -e KAFKA_HOST=kafka:9092 \
+            -e MQTT_HOST=mosquitto \
+            -e MQTT_PORT=1883 \
+            simulator -c '
+          import socket, time
+          from kafka import KafkaConsumer
+          deadline = time.monotonic() + 90
+          while time.monotonic() < deadline:
+              try:
+                  consumer = KafkaConsumer(bootstrap_servers="kafka:9092", request_timeout_ms=3000)
+                  topics = consumer.topics()
+                  consumer.close()
+                  with socket.create_connection(("mosquitto", 1883), timeout=3):
+                      pass
+                  assert "sensor-telemetry" in topics, topics
+                  print("Isolated Kafka/MQTT connectivity confirmed")
+                  break
+              except Exception as exc:
+                  print("Waiting for isolated brokers:", exc, flush=True)
+                  time.sleep(3)
+          else:
+              raise SystemExit("Isolated broker readiness timed out")
+          '
+      - name: Run all four broker-dependent Module 01 tests
+        run: |
+          docker compose -p pms-ci-m1 -f docker-compose.m1-integration-test.yml run --rm --no-deps \
+            -v "$PWD:/workspace" -w /workspace \
+            -e KAFKA_HOST=kafka:9092 \
+            -e MQTT_HOST=mosquitto \
+            -e MQTT_PORT=1883 \
+            --entrypoint sh simulator -c \
+            'python -m pip install --quiet pytest && python -m pytest -q -rs --junitxml=pytest-broker.xml tests/test_m1_integration.py::TestKafkaDirectDelivery tests/test_m1_integration.py::TestMQTTBridge'
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse("pytest-broker.xml").getroot()
+          suite = root if root.tag == "testsuite" else root.find("testsuite")
+          assert suite is not None
+          counts = {key: int(suite.attrib.get(key, "0")) for key in
+                    ("tests", "failures", "errors", "skipped")}
+          print("Broker test counts:", counts)
+          assert counts == {"tests": 4, "failures": 0, "errors": 0, "skipped": 0}, (
+              "All four real-broker tests must run and pass"
+          )
+          PY
+      - name: Save logs if broker tests fail
+        if: failure()
+        run: docker compose -p pms-ci-m1 -f docker-compose.m1-integration-test.yml logs --no-color --tail=100
+      - name: Tear down only the isolated CI stack
+        if: always()
+        run: docker compose -p pms-ci-m1 -f docker-compose.m1-integration-test.yml down --remove-orphans
+      - name: Publish broker test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pms-broker-junit
+          path: pytest-broker.xml
+          if-no-files-found: ignore
