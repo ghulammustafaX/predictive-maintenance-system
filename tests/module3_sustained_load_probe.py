@@ -26,7 +26,7 @@ for key, value in EXPECTED.items():
 
 PARTITIONS = 4
 RECORDS_PER_MODE = int(os.environ.get("MODULE3_LOAD_RECORDS", "3000"))
-TARGET_RATE = float(os.environ.get("MODULE3_LOAD_RATE_PER_SECOND", "50"))
+TARGET_RATE = float(os.environ.get("MODULE3_LOAD_RATE_PER_SECOND", "200"))
 RESULTS_DIR = Path(os.environ.get("MODULE3_LOAD_RESULTS_DIR", "/results"))
 TOPICS = {
     "legacy": "m3-load-legacy-telemetry",
@@ -150,6 +150,13 @@ def verify() -> None:
             raise AssertionError(f"{mode} end-to-end latency sample count mismatch")
         if worker["write_latency_ms"]["calls"] < 1 or worker["commit_latency_ms"]["calls"] < 1:
             raise AssertionError(f"{mode} missing write/commit timing samples")
+        if mode == "legacy" and worker["points_per_write"]["average"] != 1:
+            raise AssertionError(f"legacy consumer must write exactly one point per call: {worker['points_per_write']}")
+        if mode == "batch" and worker["points_per_write"]["average"] < 2:
+            raise AssertionError(
+                "batch workload did not exercise multi-point writes sufficiently: "
+                f"{worker['points_per_write']}"
+            )
         results[mode] = worker
 
     with InfluxDBClient(
