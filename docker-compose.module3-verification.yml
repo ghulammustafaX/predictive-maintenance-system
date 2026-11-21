@@ -48,6 +48,7 @@ services:
         kafka-topics --bootstrap-server kafka:9092 --create --topic m3-e2e-legacy-telemetry --partitions 1 --replication-factor 1
         kafka-topics --bootstrap-server kafka:9092 --create --topic m3-e2e-batch-telemetry --partitions 1 --replication-factor 1
         kafka-topics --bootstrap-server kafka:9092 --create --topic m3-inflight-telemetry --partitions 1 --replication-factor 1
+        kafka-topics --bootstrap-server kafka:9092 --create --topic m3-rebalance-telemetry --partitions 2 --replication-factor 1
 
   influxdb:
     image: influxdb:2.7
@@ -336,4 +337,69 @@ services:
       INFLUXDB_TOKEN: m3-isolated-token
       INFLUXDB_ORG: m3-isolated-org
       INFLUXDB_BUCKET: m3-isolated-bucket
+
+  rebalance-fault-worker:
+    build: ./ingestion
+    command: ["python", "/tests/module3_rebalance_fault_worker.py"]
+    restart: "no"
+    volumes:
+      - ./tests/module3_rebalance_fault_worker.py:/tests/module3_rebalance_fault_worker.py:ro
+      - m3-rebalance-coordination:/coordination
+    depends_on:
+      topic-init:
+        condition: service_completed_successfully
+      influxdb:
+        condition: service_healthy
+    environment:
+      MODULE3_REBALANCE_FAULT_GUARD: m3-isolated-rebalance-fault-only
+      PMS_BATCH_WORKER_CONFIRM: opt-in-isolated-batch-worker
+      PMS_INFLUX_BATCH_SIZE: "3"
+      KAFKA_MAX_POLL_RECORDS: "12"
+      KAFKA_BROKER: kafka:9092
+      SENSOR_TOPIC: m3-rebalance-telemetry
+      DEAD_LETTER_TOPIC: m3-isolated-dead-letter
+      CONSUMER_GROUP: m3-rebalance-group
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: m3-isolated-token
+      INFLUXDB_ORG: m3-isolated-org
+      INFLUXDB_BUCKET: m3-isolated-bucket
+
+  rebalance-peer-worker:
+    build: ./ingestion
+    command: ["python", "src/kafka_batch_consumer.py"]
+    restart: "no"
+    depends_on:
+      topic-init:
+        condition: service_completed_successfully
+      influxdb:
+        condition: service_healthy
+    environment:
+      PMS_BATCH_WORKER_CONFIRM: opt-in-isolated-batch-worker
+      PMS_INFLUX_BATCH_SIZE: "3"
+      KAFKA_MAX_POLL_RECORDS: "12"
+      KAFKA_BROKER: kafka:9092
+      SENSOR_TOPIC: m3-rebalance-telemetry
+      DEAD_LETTER_TOPIC: m3-isolated-dead-letter
+      CONSUMER_GROUP: m3-rebalance-group
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: m3-isolated-token
+      INFLUXDB_ORG: m3-isolated-org
+      INFLUXDB_BUCKET: m3-isolated-bucket
+
+  rebalance-verifier:
+    build: ./ingestion
+    entrypoint: ["python", "/tests/module3_rebalance_probe.py"]
+    volumes:
+      - ./tests/module3_rebalance_probe.py:/tests/module3_rebalance_probe.py:ro
+      - m3-rebalance-coordination:/coordination
+    environment:
+      MODULE3_REBALANCE_PROBE_GUARD: m3-isolated-rebalance-probe-only
+      KAFKA_BROKER: kafka:9092
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: m3-isolated-token
+      INFLUXDB_ORG: m3-isolated-org
+      INFLUXDB_BUCKET: m3-isolated-bucket
+
+volumes:
+  m3-rebalance-coordination:
 
