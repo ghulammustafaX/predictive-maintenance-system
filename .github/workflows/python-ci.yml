@@ -215,6 +215,17 @@ jobs:
             test -n "$container_id"
             test "$(docker inspect "$container_id" --format '{{.State.Running}}')" = true
           done
+      - name: Verify partition-specific retry isolation with real Kafka and InfluxDB
+        run: |
+          set -euo pipefail
+          compose=(docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml)
+          "${compose[@]}" run --rm --no-deps partition-fault-verifier prepare
+          "${compose[@]}" up -d --no-deps --build partition-fault-worker
+          "${compose[@]}" run --rm --no-deps partition-fault-verifier verify
+          "${compose[@]}" logs --no-color partition-fault-worker | grep -F 'M3_PARTITION_FAULT_P0_WRITE_INJECTED'
+          container_id=$("${compose[@]}" ps -q partition-fault-worker)
+          test -n "$container_id"
+          test "$(docker inspect "$container_id" --format '{{.State.Running}}')" = true
       - name: Save isolated stack logs on failure
         if: failure()
         run: |
