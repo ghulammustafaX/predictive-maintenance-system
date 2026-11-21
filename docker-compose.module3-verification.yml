@@ -1,0 +1,102 @@
+# Isolated Module 03 Kafka-to-InfluxDB verification only.
+# This file intentionally does NOT reference docker-compose.yml, external volumes,
+# production container names, published host ports, or production credentials.
+# Run using an explicit project name, e.g. -p pms-ci-m3.
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: "2181"
+      ZOOKEEPER_TICK_TIME: "2000"
+    healthcheck:
+      test: ["CMD-SHELL", "echo srvr | nc -w 2 127.0.0.1 2181 | grep -Eq '^Mode: (standalone|leader|follower)'"]
+      interval: 5s
+      timeout: 4s
+      retries: 24
+      start_period: 5s
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: "1"
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server kafka:9092 --list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 24
+
+  topic-init:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-ec"]
+    command:
+      - |
+        kafka-topics --bootstrap-server kafka:9092 --create --topic m3-isolated-telemetry --partitions 1 --replication-factor 1
+        kafka-topics --bootstrap-server kafka:9092 --create --topic m3-isolated-dead-letter --partitions 1 --replication-factor 1
+
+  influxdb:
+    image: influxdb:2.7
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: m3-test-user
+      DOCKER_INFLUXDB_INIT_PASSWORD: m3-isolated-password-123
+      DOCKER_INFLUXDB_INIT_ORG: m3-isolated-org
+      DOCKER_INFLUXDB_INIT_BUCKET: m3-isolated-bucket
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: m3-isolated-token
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  consumer:
+    build: ./ingestion
+    command: ["python", "src/kafka_consumer.py"]
+    restart: on-failure
+    depends_on:
+      topic-init:
+        condition: service_completed_successfully
+      influxdb:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER: kafka:9092
+      SENSOR_TOPIC: m3-isolated-telemetry
+      DEAD_LETTER_TOPIC: m3-isolated-dead-letter
+      CONSUMER_GROUP: m3-isolated-consumer
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: m3-isolated-token
+      INFLUXDB_ORG: m3-isolated-org
+      INFLUXDB_BUCKET: m3-isolated-bucket
+      INFLUX_MAX_WRITE_RETRIES: "3"
+      KAFKA_MAX_POLL_RECORDS: "5"
+
+  verifier:
+    build: ./ingestion
+    entrypoint: ["python", "/tests/module3_storage_probe.py"]
+    volumes:
+      - ./tests/module3_storage_probe.py:/tests/module3_storage_probe.py:ro
+    depends_on:
+      topic-init:
+        condition: service_completed_successfully
+      influxdb:
+        condition: service_healthy
+    environment:
+      MODULE3_TEST_GUARD: m3-isolated-only
+      KAFKA_BROKER: kafka:9092
+      SENSOR_TOPIC: m3-isolated-telemetry
+      DEAD_LETTER_TOPIC: m3-isolated-dead-letter
+      CONSUMER_GROUP: m3-isolated-consumer
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: m3-isolated-token
+      INFLUXDB_ORG: m3-isolated-org
+      INFLUXDB_BUCKET: m3-isolated-bucket

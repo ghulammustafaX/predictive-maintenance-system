@@ -146,3 +146,25 @@ jobs:
           name: pms-broker-junit
           path: pytest-broker.xml
           if-no-files-found: ignore
+
+  influxdb-integration:
+    name: Isolated Kafka and InfluxDB persistence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start isolated Module 03 stack
+        run: |
+          docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml up -d --wait --wait-timeout 240 --build \
+            zookeeper kafka topic-init influxdb consumer
+      - name: Exercise real Kafka consumer and InfluxDB storage
+        run: |
+          docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml run --rm --no-deps verifier
+      - name: Save isolated stack logs on failure
+        if: failure()
+        run: |
+          docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml ps -a
+          docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml logs --no-color --tail=120
+      - name: Tear down only isolated Module 03 services
+        if: always()
+        run: docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml down --remove-orphans
