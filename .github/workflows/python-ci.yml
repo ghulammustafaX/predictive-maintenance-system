@@ -40,8 +40,10 @@ jobs:
             -r ml/requirements.txt \
             -r ml/streaming/requirements.txt \
             -r ml/prediction/requirements.txt
-      - name: Run full regression with offline broker tests explicitly skipped
-        run: python -m pytest tests/ -q -rs --junitxml=pytest-regression.xml
+      - name: Run offline regression (broker tests run in the separate integration job)
+        run: |
+          python -m pytest tests/ --ignore=tests/test_m1_integration.py -q -rs \
+            --junitxml=pytest-regression.xml
       - name: Publish regression test report
         if: always()
         uses: actions/upload-artifact@v4
