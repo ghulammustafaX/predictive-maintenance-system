@@ -158,6 +158,9 @@ def test_observability_config_rejects_invalid_thresholds(monkeypatch):
     with pytest.raises(ValueError, match="alert threshold"):
         PartitionIsolatingBatchWorker(consumer, writer, dlq, alert_age_seconds=0)
     monkeypatch.setenv("PMS_BATCH_WORKER_CONFIRM", "opt-in-isolated-batch-worker")
+    # Satisfy the independent batch-size safety gate so this assertion reaches
+    # the alert-threshold validation being tested.
+    monkeypatch.setattr("kafka_batch_consumer.legacy.MAX_POLL_RECORDS", 200)
     monkeypatch.setattr("kafka_batch_consumer.ALERT_RETRY_THRESHOLD", 0)
     with pytest.raises(ValueError, match="alert thresholds"):
         require_safe_config()
