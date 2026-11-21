@@ -45,6 +45,18 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _statistics_hash_matches(path: Path, expected: str) -> bool:
+    """Verify JSON bytes, allowing only LF/CRLF checkout conversion."""
+    content = path.read_bytes()
+    if hashlib.sha256(content).hexdigest() == expected:
+        return True
+    lf = content.replace(b"\r\n", b"\n")
+    if b"\r" in lf:
+        return False
+    return any(hashlib.sha256(candidate).hexdigest() == expected for candidate in
+               (lf, lf.replace(b"\n", b"\r\n")))
+
+
 def _read_manifest(artifact_dir: Path) -> dict[str, Any]:
     path = artifact_dir / "preprocessing_manifest.json"
     if not path.is_file():
@@ -83,7 +95,10 @@ def validate_preprocessing_artifacts(
             if not path.is_file():
                 raise CompatibilityError(f"Missing FD dataset {label} artifact")
             expected = hashes.get(dataset, {}).get(label)
-            if not isinstance(expected, str) or sha256_file(path) != expected:
+            if not isinstance(expected, str) or not (
+                _statistics_hash_matches(path, expected) if label == "statistics"
+                else sha256_file(path) == expected
+            ):
                 raise CompatibilityError(f"FD dataset {label} artifact hash mismatch")
     return manifest
 
@@ -112,6 +127,7 @@ def validate_model_artifacts(
         raise CompatibilityError("LSTM checkpoint input size is not 24")
     return {
         "schema_version": manifest["schema_version"],
+        "artifact_version": manifest["artifact_version"],
         "feature_order": list(manifest["feature_order"]),
         "window_size": manifest["window_size"],
         "checkpoint_sha256": manifest["checkpoint_sha256"],

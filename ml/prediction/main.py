@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from contextlib import asynccontextmanager
 
@@ -11,6 +12,7 @@ from ml.prediction.service import (
     PredictionService,
     build_request_prediction,
 )
+from ml.prediction.checkpoint import validate_checkpoint_path
 
 logging.basicConfig(level="INFO")
 service = PredictionService()
@@ -18,6 +20,7 @@ service = PredictionService()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    validate_checkpoint_path(os.getenv("PREDICTION_CHECKPOINT_PATH"))
     thread = threading.Thread(target=service.start_consumer, daemon=True)
     service._thread = thread
     thread.start()

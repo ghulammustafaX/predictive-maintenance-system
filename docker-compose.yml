@@ -168,6 +168,7 @@ services:
       context: .
       dockerfile: ml/prediction/Dockerfile
     container_name: pms-prediction
+    scale: 1
     depends_on:
       kafka-topic-init:
         condition: service_completed_successfully
@@ -179,11 +180,14 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       PREDICTION_INPUT_TOPIC: preprocessed-telemetry
       PREDICTION_OUTPUT_TOPIC: rul-predictions
+      PREDICTION_CHECKPOINT_PATH: /var/lib/pms-prediction/prediction.sqlite
       RUL_CHECKPOINT_PATH: /app/ml/saved/checkpoints/raw/lstm_raw_20260626T082955Z.pt
       INFLUXDB_URL: http://influxdb:8086
       INFLUXDB_TOKEN: ${INFLUXDB_TOKEN}
       INFLUXDB_ORG: ${INFLUXDB_ORG}
       INFLUXDB_BUCKET: ${INFLUXDB_BUCKET}
+    volumes:
+      - prediction-checkpoint:/var/lib/pms-prediction
     networks:
       - pms-network
 
@@ -192,6 +196,8 @@ services:
       context: .
       dockerfile: ml/streaming/Dockerfile
     container_name: pms-preprocessing
+    # Supported only on one host, with all owners using this same local volume.
+    scale: 1
     depends_on:
       kafka-topic-init:
         condition: service_completed_successfully
@@ -200,6 +206,9 @@ services:
       PREPROCESSING_INPUT_TOPIC: sensor-telemetry
       PREPROCESSING_OUTPUT_TOPIC: preprocessed-telemetry
       PREPROCESSING_ARTIFACT_DIR: /app/ml/saved_v2_a1/scalers
+      PREPROCESSING_CHECKPOINT_PATH: /var/lib/pms-preprocessing/preprocessing.sqlite
+    volumes:
+      - preprocessing-checkpoint:/var/lib/pms-preprocessing
     networks:
       - pms-network
 
@@ -278,5 +287,7 @@ volumes:
     external: true
   influxdb-data:
   postgres-data:
+  prediction-checkpoint:
+  preprocessing-checkpoint:
   mosquitto-data:
   mosquitto-log:
