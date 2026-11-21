@@ -18,8 +18,8 @@ Compare the accepted single-point Kafka consumer with the opt-in partition-isola
 | Parameter | Value |
 | --- | ---: |
 | Records per consumer | 3,000 |
-| Target publication rate | 50 records/second per topic |
-| Nominal publication duration | 60 seconds |
+| Target publication rate | 200 records/second per topic |
+| Nominal publication duration | 15 seconds |
 | Partitions per topic | 4 |
 | Telemetry schema | Existing version 1.0.0 schema, including 21 sensor fields |
 | Legacy consumer | Existing `ingestion/src/kafka_consumer.py` processing and commit functions |
@@ -34,6 +34,7 @@ The test-only worker records:
 
 - End-to-end latency from Kafka record timestamp to successful Kafka offset commit, p50, p95 and p99.
 - Synchronous InfluxDB write-call latency, p50, p95 and p99.
+- Effective write batch utilization, average, p50, p95 and maximum points per InfluxDB write call.
 - Kafka commit-call latency, p50, p95 and p99.
 - Records per second from first observed record to final successful commit.
 - Process CPU time and peak resident memory.
@@ -49,9 +50,10 @@ The benchmark passes only when both consumer modes:
 3. Produce one end-to-end latency sample per committed record.
 4. Finish with all four partitions assigned and zero consumer lag.
 5. Produce write and commit latency measurements.
-6. Exit successfully within the bounded worker timeout.
+6. Confirm the legacy consumer writes exactly one point per call and the batch candidate averages at least two points per write call, proving the workload actually exercises multi-point writes.
+7. Exit successfully within the bounded worker timeout.
 
-The test does not assert that batching must be faster. A single CI comparison is indicative, not a statistically powered performance study, SLA, production capacity claim, or 24-hour soak test. Shared CI hardware and concurrent workers can affect measured rates.
+The initial 50-record/second run completed successfully but produced only 1.04 points per batch write on average. That did not sufficiently exercise batching and was not a fair throughput comparison. The benchmark rate is therefore raised to 200 records/second per topic and now asserts measured multi-point write utilization. The test still does not assert that batching must be faster. A single CI comparison is indicative, not a statistically powered performance study, SLA, production capacity claim, or 24-hour soak test. Shared CI hardware and concurrent workers can affect measured rates.
 
 ## Remaining reliability work
 
