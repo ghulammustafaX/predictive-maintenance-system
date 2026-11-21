@@ -45,6 +45,8 @@ services:
         kafka-topics --bootstrap-server kafka:9092 --create --topic m3-isolated-dead-letter --partitions 1 --replication-factor 1
         kafka-topics --bootstrap-server kafka:9092 --create --topic m3-batch-telemetry --partitions 1 --replication-factor 1
         kafka-topics --bootstrap-server kafka:9092 --create --topic m3-batch-dead-letter --partitions 1 --replication-factor 1
+        kafka-topics --bootstrap-server kafka:9092 --create --topic m3-e2e-legacy-telemetry --partitions 1 --replication-factor 1
+        kafka-topics --bootstrap-server kafka:9092 --create --topic m3-e2e-batch-telemetry --partitions 1 --replication-factor 1
 
   influxdb:
     image: influxdb:2.7
@@ -210,4 +212,63 @@ services:
       INFLUXDB_TOKEN: m3-isolated-token
       INFLUXDB_ORG: m3-isolated-org
       INFLUXDB_BUCKET: m3-isolated-bucket
+  
+  e2e-legacy-worker:
+    build: ./ingestion
+    command: ["python", "src/kafka_consumer.py"]
+    restart: "no"
+    depends_on:
+      topic-init:
+        condition: service_completed_successfully
+      influxdb:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER: kafka:9092
+      SENSOR_TOPIC: m3-e2e-legacy-telemetry
+      DEAD_LETTER_TOPIC: m3-isolated-dead-letter
+      CONSUMER_GROUP: m3-e2e-legacy-group
+      KAFKA_MAX_POLL_RECORDS: "40"
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: m3-isolated-token
+      INFLUXDB_ORG: m3-isolated-org
+      INFLUXDB_BUCKET: m3-isolated-bucket
 
+  e2e-batch-worker:
+    build: ./ingestion
+    command: ["python", "src/kafka_batch_consumer.py"]
+    restart: "no"
+    depends_on:
+      topic-init:
+        condition: service_completed_successfully
+      influxdb:
+        condition: service_healthy
+    environment:
+      PMS_BATCH_WORKER_CONFIRM: opt-in-isolated-batch-worker
+      PMS_INFLUX_BATCH_SIZE: "20"
+      KAFKA_BROKER: kafka:9092
+      SENSOR_TOPIC: m3-e2e-batch-telemetry
+      DEAD_LETTER_TOPIC: m3-isolated-dead-letter
+      CONSUMER_GROUP: m3-e2e-batch-group
+      KAFKA_MAX_POLL_RECORDS: "40"
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: m3-isolated-token
+      INFLUXDB_ORG: m3-isolated-org
+      INFLUXDB_BUCKET: m3-isolated-bucket
+
+  e2e-verifier:
+    build: ./ingestion
+    entrypoint: ["python", "/tests/module3_e2e_restart_probe.py"]
+    volumes:
+      - ./tests/module3_e2e_restart_probe.py:/tests/module3_e2e_restart_probe.py:ro
+    depends_on:
+      topic-init:
+        condition: service_completed_successfully
+      influxdb:
+        condition: service_healthy
+    environment:
+      MODULE3_E2E_GUARD: m3-isolated-e2e-only
+      KAFKA_BROKER: kafka:9092
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: m3-isolated-token
+      INFLUXDB_ORG: m3-isolated-org
+      INFLUXDB_BUCKET: m3-isolated-bucket
