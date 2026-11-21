@@ -193,7 +193,7 @@ def _telemetry_query(
     """
     window_seconds = max(1, int((end_at - start_at).total_seconds() / points))
     fields = " or ".join(f'r._field == "{channel}"' for channel in selected_channels)
-    run_filter = f'  |> filter(fn: (r) => r.run_id == "{run_id}")\\n' if run_id is not None else ""
+    run_filter = f'  |> filter(fn: (r) => r.run_id == "{run_id}")\n' if run_id is not None else ""
     return f'''from(bucket: "{INFLUXDB_BUCKET}")
   |> range(start: {_flux_time(start_at)}, stop: {_flux_time(end_at)})
   |> filter(fn: (r) => r._measurement == "{MEASUREMENT}" and ({_unit_tag_filter(unit_id)}) and ({fields}))
