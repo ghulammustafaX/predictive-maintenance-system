@@ -121,8 +121,7 @@ def publish_p0(client) -> None:
     for name in (
         "influx_write_acknowledged",
         "peer_joined_during_processing",
-        "stale_commit_rejected",
-        "stale_commit_unexpectedly_succeeded",
+        "write_then_commit_confirmed",
     ):
         (COORDINATION / name).unlink(missing_ok=True)
     committed, ends = offsets()
@@ -178,35 +177,41 @@ def trigger_rebalance(client) -> None:
 
 
 def verify_recovery(client) -> None:
-    rejected = COORDINATION / "stale_commit_rejected"
-    unexpected = COORDINATION / "stale_commit_unexpectedly_succeeded"
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline and not rejected.exists() and not unexpected.exists():
+    committed_marker = COORDINATION / "write_then_commit_confirmed"
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline and not committed_marker.exists():
         time.sleep(0.1)
-    assert not unexpected.exists(), "Kafka unexpectedly accepted the old owner's commit"
-    assert rejected.exists(), "Old owner did not record a broker-rejected commit"
-    error_name = rejected.read_text().strip()
-    assert error_name in ALLOWED_COMMIT_ERRORS, f"Unexpected stale commit rejection: {error_name}"
-    print(f"PASS: broker rejected stale in-flight commit with {error_name}", flush=True)
+    assert committed_marker.exists(), "The acknowledged batch was not committed during the observed rebalance"
+    commit_text = committed_marker.read_text().strip()
+    assert "partition=0 next_offset=3" in commit_text, f"Unexpected first commit marker: {commit_text}"
+    print("PASS: broker accepted the offset only after the first InfluxDB batch was acknowledged", flush=True)
 
-    deadline = time.monotonic() + 120
-    last = None
-    while time.monotonic() < deadline:
-        committed, ends = offsets()
-        counts = (influx_count(client, RUN_P0), influx_count(client, RUN_P1))
-        last = (committed, ends, counts)
-        if committed == {0: COUNT, 1: COUNT} and ends == {0: COUNT, 1: COUNT} and counts == (COUNT, COUNT):
-            break
-        time.sleep(1)
-    else:
-        raise AssertionError(f"Partitions did not converge after reassignment: {last}")
+    admin = KafkaAdminClient(bootstrap_servers=REQUIRED["KAFKA_BROKER"], request_timeout_ms=10000)
+    try:
+        deadline = time.monotonic() + 120
+        last = None
+        while time.monotonic() < deadline:
+            committed, ends = offsets()
+            counts = (influx_count(client, RUN_P0), influx_count(client, RUN_P1))
+            state = group_state(admin)
+            last = (committed, ends, counts, state)
+            if (
+                committed == {0: COUNT, 1: COUNT}
+                and ends == {0: COUNT, 1: COUNT}
+                and counts == (COUNT, COUNT)
+                and state == ("stable", 2)
+            ):
+                break
+            time.sleep(1)
+        else:
+            raise AssertionError(f"Partitions did not converge after reassignment: {last}")
+    finally:
+        admin.close()
 
-    assert influx_count(client, RUN_P0) == COUNT
-    assert influx_count(client, RUN_P1) == COUNT
-    print("PASS: partition 0 replayed to six unique points and offset 6", flush=True)
-    print("PASS: partition 1 progressed after rebalance to six unique points and offset 6", flush=True)
-    print("PASS: both Kafka partitions have zero lag and no lost records", flush=True)
-    print("MODULE 03 MULTI-PARTITION REBALANCE AND STALE-COMMIT RECOVERY: PASS", flush=True)
+    print("PASS: partition 0 completed its remaining records and committed offset 6", flush=True)
+    print("PASS: partition 1 progressed after reassignment to six unique points and offset 6", flush=True)
+    print("PASS: Kafka group stabilized with two members and both partitions at zero lag", flush=True)
+    print("MODULE 03 MULTI-PARTITION REBALANCE AND RECOVERY: PASS", flush=True)
 
 
 def main() -> None:
