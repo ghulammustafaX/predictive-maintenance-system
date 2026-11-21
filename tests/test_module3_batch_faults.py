@@ -105,3 +105,156 @@ def test_single_point_writer_and_batch_writer_produce_same_schema():
     assert original._tags == batched._tags
     assert original._fields == batched._fields
     assert original._time == batched._time
+
+
+def _partition_worker(batch_size=2, clock=None):
+    from kafka.structs import TopicPartition
+    from kafka_batch_consumer import PartitionIsolatingBatchWorker
+
+    consumer, writer, dlq = MagicMock(), MagicMock(), MagicMock()
+    tp0 = TopicPartition("test-topic", 0)
+    tp1 = TopicPartition("test-topic", 1)
+    assigned = {tp0, tp1}
+    paused = set()
+    consumer.assignment.return_value = assigned
+    consumer.paused.side_effect = lambda: set(paused)
+    consumer.pause.side_effect = lambda *partitions: paused.update(partitions)
+    consumer.resume.side_effect = lambda *partitions: [paused.discard(tp) for tp in partitions]
+    worker = PartitionIsolatingBatchWorker(
+        consumer, writer, dlq, batch_size=batch_size,
+        retry_base_seconds=2, retry_max_seconds=8,
+        clock=clock or (lambda: 0.0),
+    )
+    return worker, consumer, writer, dlq, tp0, tp1, paused
+
+
+def _message_for_run(offset, partition, run_id, valid=True):
+    import json
+    from types import SimpleNamespace
+
+    msg = message(offset, valid=valid, partition=partition)
+    payload = json.loads(msg.value)
+    if valid:
+        payload["run_id"] = run_id
+    return SimpleNamespace(
+        topic=msg.topic, partition=msg.partition, offset=msg.offset,
+        value=json.dumps(payload).encode(),
+    )
+
+
+def _committed_partition_offsets(consumer):
+    commits = []
+    for call in consumer.commit.call_args_list:
+        tp, metadata = next(iter(call.args[0].items()))
+        commits.append((tp.partition, metadata.offset))
+    return commits
+
+
+def test_failed_partition_is_paused_while_healthy_partition_commits():
+    now = [0.0]
+    worker, consumer, writer, dlq, tp0, tp1, paused = _partition_worker(
+        clock=lambda: now[0]
+    )
+    failed_p0_once = [False]
+
+    def write(**kwargs):
+        run_ids = {point._tags["run_id"] for point in kwargs["record"]}
+        if "fault-p0" in run_ids and not failed_p0_once[0]:
+            failed_p0_once[0] = True
+            raise TimeoutError("partition 0 Influx outage")
+
+    writer.write.side_effect = write
+    worker.process_polled_records({
+        tp0: [_message_for_run(0, 0, "fault-p0"), _message_for_run(1, 0, "fault-p0")],
+        tp1: [_message_for_run(0, 1, "healthy-p1"), _message_for_run(1, 1, "healthy-p1")],
+    })
+
+    assert tp0 in paused
+    assert tp1 not in paused
+    assert _committed_partition_offsets(consumer) == [(1, 2)]
+    assert len(worker.partitions[tp0].records) == 2
+    assert len(worker.partitions[tp1].records) == 0
+
+    now[0] = 2.0
+    worker.process_ready()
+
+    assert tp0 not in paused
+    assert _committed_partition_offsets(consumer) == [(1, 2), (0, 2)]
+    assert writer.write.call_count == 3
+    assert worker.completed_records == 4
+
+
+def test_commit_retry_does_not_rewrite_confirmed_batch_or_block_other_partition():
+    now = [0.0]
+    worker, consumer, writer, dlq, tp0, tp1, paused = _partition_worker(
+        clock=lambda: now[0]
+    )
+    failed_commit_once = [False]
+
+    def commit(offsets, timeout_ms):
+        tp = next(iter(offsets))
+        if tp == tp0 and not failed_commit_once[0]:
+            failed_commit_once[0] = True
+            raise TimeoutError("partition 0 commit response lost")
+
+    consumer.commit.side_effect = commit
+    worker.process_polled_records({
+        tp0: [_message_for_run(0, 0, "commit-p0"), _message_for_run(1, 0, "commit-p0")],
+        tp1: [_message_for_run(0, 1, "commit-p1"), _message_for_run(1, 1, "commit-p1")],
+    })
+
+    assert tp0 in paused
+    assert tp1 not in paused
+    assert writer.write.call_count == 2
+    assert _committed_partition_offsets(consumer) == [(1, 2)]
+
+    now[0] = 2.0
+    worker.process_ready()
+
+    assert tp0 not in paused
+    assert writer.write.call_count == 2, "commit retry must not republish confirmed InfluxDB batch"
+    assert _committed_partition_offsets(consumer) == [(1, 2), (0, 2)]
+
+
+def test_dlq_failure_isolated_and_retried_without_advancing_later_records():
+    now = [0.0]
+    worker, consumer, writer, dlq, tp0, tp1, paused = _partition_worker(
+        clock=lambda: now[0]
+    )
+    dlq.send.return_value.get.side_effect = [TimeoutError("DLQ ack unavailable"), None]
+    worker.process_polled_records({
+        tp0: [_message_for_run(0, 0, "bad-p0", valid=False)],
+        tp1: [_message_for_run(0, 1, "healthy-p1")],
+    })
+
+    assert tp0 in paused
+    assert tp1 not in paused
+    assert _committed_partition_offsets(consumer) == [(1, 1)]
+    assert writer.write.call_count == 1
+
+    now[0] = 2.0
+    worker.process_ready()
+
+    assert tp0 not in paused
+    assert _committed_partition_offsets(consumer) == [(1, 1), (0, 1)]
+    assert dlq.send.call_count == 2
+
+
+def test_revocation_discards_uncommitted_partition_queue_for_new_owner_replay():
+    now = [0.0]
+    worker, consumer, writer, dlq, tp0, tp1, paused = _partition_worker(
+        clock=lambda: now[0]
+    )
+    writer.write.side_effect = TimeoutError("partition 0 unavailable")
+    worker.process_polled_records({
+        tp0: [_message_for_run(0, 0, "revoke-p0"), _message_for_run(1, 0, "revoke-p0")],
+    })
+    assert tp0 in paused
+    assert tp0 in worker.partitions
+
+    worker.on_partitions_revoked([tp0])
+    assert tp0 not in worker.partitions
+    worker.on_partitions_assigned([tp0])
+    assert tp0 in worker.partitions
+    assert len(worker.partitions[tp0].records) == 0
+    assert consumer.commit.call_count == 0
