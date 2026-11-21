@@ -71,46 +71,44 @@ jobs:
         run: |
           docker compose -p pms-ci-m1 -f docker-compose.m1-integration-test.yml up -d --build \
             zookeeper kafka mosquitto topic-init mqtt-bridge
-      - name: Verify broker connectivity before tests
-        env:
-          KAFKA_HOST: localhost:39092
-          MQTT_HOST: localhost
-          MQTT_PORT: '31883'
+      - name: Build isolated simulator test image
+        run: docker compose -p pms-ci-m1 -f docker-compose.m1-integration-test.yml build simulator
+      - name: Verify brokers from inside the isolated Docker network
         run: |
-          python - <<'PY'
-          import os, socket, time
+          docker compose -p pms-ci-m1 -f docker-compose.m1-integration-test.yml run --rm --no-deps \
+            --entrypoint python \
+            -e KAFKA_HOST=kafka:9092 \
+            -e MQTT_HOST=mosquitto \
+            -e MQTT_PORT=1883 \
+            simulator -c '
+          import socket, time
           from kafka import KafkaConsumer
-          deadline = time.monotonic() + 120
+          deadline = time.monotonic() + 90
           while time.monotonic() < deadline:
               try:
-                  consumer = KafkaConsumer(
-                      bootstrap_servers=os.environ["KAFKA_HOST"],
-                      request_timeout_ms=3000,
-                  )
+                  consumer = KafkaConsumer(bootstrap_servers="kafka:9092", request_timeout_ms=3000)
                   topics = consumer.topics()
                   consumer.close()
-                  with socket.create_connection(
-                      (os.environ["MQTT_HOST"], int(os.environ["MQTT_PORT"])), timeout=3
-                  ):
+                  with socket.create_connection(("mosquitto", 1883), timeout=3):
                       pass
-                  assert "sensor-telemetry" in topics
-                  print("Kafka and MQTT available; test topics initialized")
+                  assert "sensor-telemetry" in topics, topics
+                  print("Isolated Kafka/MQTT connectivity confirmed")
                   break
               except Exception as exc:
-                  print(f"Waiting for isolated brokers: {exc}")
+                  print("Waiting for isolated brokers:", exc, flush=True)
                   time.sleep(3)
           else:
-              raise SystemExit("Isolated Kafka/MQTT readiness timed out")
-          PY
+              raise SystemExit("Isolated broker readiness timed out")
+          '
       - name: Run all four broker-dependent Module 01 tests
-        env:
-          KAFKA_HOST: localhost:39092
-          MQTT_HOST: localhost
-          MQTT_PORT: '31883'
         run: |
-          python -m pytest -q -rs --junitxml=pytest-broker.xml \
-            tests/test_m1_integration.py::TestKafkaDirectDelivery \
-            tests/test_m1_integration.py::TestMQTTBridge
+          docker compose -p pms-ci-m1 -f docker-compose.m1-integration-test.yml run --rm --no-deps \
+            -v "$PWD:/workspace" -w /workspace \
+            -e KAFKA_HOST=kafka:9092 \
+            -e MQTT_HOST=mosquitto \
+            -e MQTT_PORT=1883 \
+            --entrypoint sh simulator -c \
+            'python -m pip install --quiet pytest && python -m pytest -q -rs --junitxml=pytest-broker.xml tests/test_m1_integration.py::TestKafkaDirectDelivery tests/test_m1_integration.py::TestMQTTBridge'
           python - <<'PY'
           import xml.etree.ElementTree as ET
           root = ET.parse("pytest-broker.xml").getroot()
