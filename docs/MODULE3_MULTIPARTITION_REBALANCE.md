@@ -1,6 +1,6 @@
 # Module 03, multi-partition rebalance and durable-prefix recovery
 
-<badge>Verified in isolated GitHub Actions</badge>
+**Verified in isolated GitHub Actions**
 
 **Status: PASSED.** The final workflow run was [44917967431](https://github.com/ghulammustaX/predictive-maintenance-system/actions/runs/44917967431), on branch commit `a25b4c37919d878b4ba96904d04360a70677a835`. All three workflow jobs ultimately passed. The isolated Kafka/MQTT job had one transient no-message failure on its first attempt; rerunning only that failed job passed all four tests. The offline regression and Module 03 persistence job passed on their initial attempt.
 
