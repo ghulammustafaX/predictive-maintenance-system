@@ -537,7 +537,7 @@ services:
     environment:
       MODULE3_LOAD_PROBE_GUARD: m3-isolated-sustained-load-probe-only
       MODULE3_LOAD_RECORDS: "3000"
-      MODULE3_LOAD_RATE_PER_SECOND: "50"
+      MODULE3_LOAD_RATE_PER_SECOND: "200"
       MODULE3_LOAD_RESULTS_DIR: /results
       KAFKA_BROKER: kafka:9092
       INFLUXDB_URL: http://influxdb:8086
