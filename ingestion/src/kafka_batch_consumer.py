@@ -16,6 +16,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from kafka.errors import KafkaError
 from kafka.structs import OffsetAndMetadata, TopicPartition
 
 import kafka_consumer as legacy
@@ -352,17 +353,32 @@ class PartitionIsolatingBatchWorker:
             logger.info("Resumed partition topic=%s partition=%s", tp.topic, tp.partition)
 
 
+
+def create_batch_consumer() -> Any:
+    """Create the batch consumer with the legacy connection retry policy."""
+    logger.info("Connecting batch consumer broker=%s topic=%s", legacy.KAFKA_BROKER, legacy.SENSOR_TOPIC)
+    for attempt in range(30):
+        try:
+            return legacy.KafkaConsumer(
+                bootstrap_servers=legacy.KAFKA_BROKER,
+                group_id=legacy.CONSUMER_GROUP,
+                value_deserializer=lambda value: value,
+                auto_offset_reset="earliest",
+                enable_auto_commit=False,
+                max_poll_records=legacy.MAX_POLL_RECORDS,
+                max_poll_interval_ms=legacy.MAX_POLL_INTERVAL_MS,
+            )
+        except KafkaError:
+            logger.exception("Batch Kafka connection failed attempt=%d", attempt + 1)
+            if attempt < 29:
+                time.sleep(2)
+    raise RuntimeError("Batch Kafka connection failed after 30 attempts")
+
+
+
 def run() -> None:
     require_safe_config()
-    consumer = legacy.KafkaConsumer(
-        bootstrap_servers=legacy.KAFKA_BROKER,
-        group_id=legacy.CONSUMER_GROUP,
-        value_deserializer=lambda value: value,
-        auto_offset_reset="earliest",
-        enable_auto_commit=False,
-        max_poll_records=legacy.MAX_POLL_RECORDS,
-        max_poll_interval_ms=legacy.MAX_POLL_INTERVAL_MS,
-    )
+    consumer = create_batch_consumer()
     client = None
     producer = None
     try:
