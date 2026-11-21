@@ -133,3 +133,20 @@ services:
       INFLUXDB_TOKEN: m3-isolated-token
       INFLUXDB_ORG: m3-isolated-org
       INFLUXDB_BUCKET: m3-isolated-bucket
+
+  downsample-verifier:
+    build: ./backend
+    entrypoint: ["python", "/tests/module3_downsample_probe.py"]
+    volumes:
+      - ./tests/module3_downsample_probe.py:/tests/module3_downsample_probe.py:ro
+      - ./storage/influx_init/bucket_policy.py:/storage/bucket_policy.py:ro
+      - ./storage/influx_init/downsample_task.py:/storage/downsample_task.py:ro
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      MODULE3_DOWNSAMPLE_GUARD: isolated-m3-downsampling-only
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: m3-isolated-token
+      INFLUXDB_ORG: m3-isolated-org
+      INFLUXDB_BUCKET: m3-isolated-bucket
