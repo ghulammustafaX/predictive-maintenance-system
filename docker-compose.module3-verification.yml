@@ -111,6 +111,7 @@ services:
         condition: service_healthy
     environment:
       MODULE3_TEST_GUARD: m3-isolated-query-only
+      PYTHONPATH: /app
       INFLUXDB_URL: http://influxdb:8086
       INFLUXDB_TOKEN: m3-isolated-token
       INFLUXDB_ORG: m3-isolated-org
