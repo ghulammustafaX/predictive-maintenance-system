@@ -43,6 +43,8 @@ services:
       - |
         kafka-topics --bootstrap-server kafka:9092 --create --topic m3-isolated-telemetry --partitions 1 --replication-factor 1
         kafka-topics --bootstrap-server kafka:9092 --create --topic m3-isolated-dead-letter --partitions 1 --replication-factor 1
+        kafka-topics --bootstrap-server kafka:9092 --create --topic m3-batch-telemetry --partitions 1 --replication-factor 1
+        kafka-topics --bootstrap-server kafka:9092 --create --topic m3-batch-dead-letter --partitions 1 --replication-factor 1
 
   influxdb:
     image: influxdb:2.7
@@ -150,3 +152,46 @@ services:
       INFLUXDB_TOKEN: m3-isolated-token
       INFLUXDB_ORG: m3-isolated-org
       INFLUXDB_BUCKET: m3-isolated-bucket
+
+  batch-worker:
+    build: ./ingestion
+    command: ["python", "src/kafka_batch_consumer.py"]
+    restart: "no"
+    depends_on:
+      topic-init:
+        condition: service_completed_successfully
+      influxdb:
+        condition: service_healthy
+    environment:
+      PMS_BATCH_WORKER_CONFIRM: opt-in-isolated-batch-worker
+      PMS_INFLUX_BATCH_SIZE: "3"
+      KAFKA_BROKER: kafka:9092
+      SENSOR_TOPIC: m3-batch-telemetry
+      DEAD_LETTER_TOPIC: m3-batch-dead-letter
+      CONSUMER_GROUP: m3-batch-writer-group
+      KAFKA_MAX_POLL_RECORDS: "15"
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: m3-isolated-token
+      INFLUXDB_ORG: m3-isolated-org
+      INFLUXDB_BUCKET: m3-isolated-bucket
+
+  batch-verifier:
+    build: ./ingestion
+    entrypoint: ["python", "/tests/module3_batch_probe.py"]
+    volumes:
+      - ./tests/module3_batch_probe.py:/tests/module3_batch_probe.py:ro
+    environment:
+      MODULE3_BATCH_TEST_GUARD: m3-isolated-batch-only
+      KAFKA_BROKER: kafka:9092
+      SENSOR_TOPIC: m3-batch-telemetry
+      DEAD_LETTER_TOPIC: m3-batch-dead-letter
+      CONSUMER_GROUP: m3-batch-writer-group
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: m3-isolated-token
+      INFLUXDB_ORG: m3-isolated-org
+      INFLUXDB_BUCKET: m3-isolated-bucket
+    depends_on:
+      topic-init:
+        condition: service_completed_successfully
+      influxdb:
+        condition: service_healthy
