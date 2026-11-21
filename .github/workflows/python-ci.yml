@@ -176,6 +176,16 @@ jobs:
       - name: Measure single versus batched InfluxDB writes on isolated instance
         run: |
           docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml run --rm --no-deps write-benchmark
+      - name: Run isolated legacy vs batch E2E comparison and SIGKILL restart
+        run: |
+          set -euo pipefail
+          compose=(docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml)
+          "${compose[@]}" up -d --no-deps --build e2e-legacy-worker e2e-batch-worker
+          "${compose[@]}" run --rm --no-deps e2e-verifier benchmark
+          "${compose[@]}" kill -s SIGKILL e2e-batch-worker
+          "${compose[@]}" run --rm --no-deps e2e-verifier during-outage
+          "${compose[@]}" up -d --no-deps --no-recreate e2e-batch-worker
+          "${compose[@]}" run --rm --no-deps e2e-verifier after-restart
       - name: Save isolated stack logs on failure
         if: failure()
         run: |
