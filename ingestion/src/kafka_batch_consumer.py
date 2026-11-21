@@ -16,7 +16,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from kafka.errors import KafkaError
 from kafka.structs import OffsetAndMetadata, TopicPartition
 
 import kafka_consumer as legacy
@@ -166,6 +165,7 @@ class PartitionIsolatingBatchWorker:
         self.clock = clock
         self.partitions: dict[TopicPartition, PartitionProgress] = {}
         self.completed_records = 0
+        self._next_partition_index = 0
 
     def on_partitions_revoked(self, revoked: Sequence[TopicPartition]) -> None:
         """Drop uncommitted local work before Kafka transfers ownership."""
@@ -190,46 +190,71 @@ class PartitionIsolatingBatchWorker:
             self.consumer.resume(*to_resume)
             logger.info("Resumed newly assigned partitions count=%d", len(to_resume))
 
-    def process_polled_records(self, records: dict[TopicPartition, Sequence[Any]]) -> None:
-        """Queue one poll result, then advance each assigned partition once."""
+    def enqueue_polled_records(self, records: dict[TopicPartition, Sequence[Any]]) -> None:
+        """Append one poll result without doing blocking storage work."""
         for tp, messages in records.items():
             progress = self.partitions.setdefault(tp, PartitionProgress())
             progress.records.extend(messages)
             progress.backpressure_paused = len(progress.records) >= self.batch_size
             self._sync_pause(tp, progress)
+
+    def process_polled_records(self, records: dict[TopicPartition, Sequence[Any]]) -> None:
+        """Convenience entrypoint for tests and bounded callers."""
+        self.enqueue_polled_records(records)
         self.process_ready()
 
-    def process_ready(self) -> None:
-        """Make one bounded processing attempt per ready partition per poll."""
+    def process_ready(self, max_partitions: int | None = None) -> int:
+        """Advance ready partitions fairly; runtime uses one operation per poll.
+
+        Polling between storage attempts services heartbeats and rebalance
+        callbacks even when several partitions have queued batches.
+        """
+        keys = list(self.partitions)
+        if not keys:
+            return 0
+        start = self._next_partition_index % len(keys)
+        processed = 0
         now = self.clock()
-        for tp, progress in list(self.partitions.items()):
+        for step in range(len(keys)):
+            index = (start + step) % len(keys)
+            tp = keys[index]
+            progress = self.partitions.get(tp)
+            if progress is None:
+                continue
             if progress.pending is None and progress.records:
                 progress.pending = self._prepare_pending(progress)
-            if progress.pending is not None and now >= progress.retry_at:
-                try:
-                    self._advance_pending(tp, progress)
-                except Exception:
-                    progress.retry_attempt += 1
-                    delay = min(
-                        self.retry_base_seconds * (2 ** (progress.retry_attempt - 1)),
-                        self.retry_max_seconds,
-                    )
-                    progress.retry_at = self.clock() + delay
-                    progress.failure_paused = True
-                    logger.exception(
-                        "Partition operation failed; pausing only this partition "
-                        "topic=%s partition=%s stage=%s attempt=%d retry_in_seconds=%.3f",
-                        tp.topic, tp.partition,
-                        progress.pending.stage if progress.pending else "unknown",
-                        progress.retry_attempt, delay,
-                    )
-                else:
-                    if progress.pending is None:
-                        progress.retry_attempt = 0
-                        progress.retry_at = 0.0
-                        progress.failure_paused = False
+            if progress.pending is None or now < progress.retry_at:
+                self._sync_pause(tp, progress)
+                continue
+            try:
+                self._advance_pending(tp, progress)
+            except Exception:
+                progress.retry_attempt += 1
+                delay = min(
+                    self.retry_base_seconds * (2 ** (progress.retry_attempt - 1)),
+                    self.retry_max_seconds,
+                )
+                progress.retry_at = self.clock() + delay
+                progress.failure_paused = True
+                logger.exception(
+                    "Partition operation failed; pausing only this partition "
+                    "topic=%s partition=%s stage=%s attempt=%d retry_in_seconds=%.3f",
+                    tp.topic, tp.partition,
+                    progress.pending.stage if progress.pending else "unknown",
+                    progress.retry_attempt, delay,
+                )
+            else:
+                if progress.pending is None:
+                    progress.retry_attempt = 0
+                    progress.retry_at = 0.0
+                    progress.failure_paused = False
             progress.backpressure_paused = len(progress.records) >= self.batch_size
             self._sync_pause(tp, progress)
+            processed += 1
+            self._next_partition_index = (index + 1) % max(len(keys), 1)
+            if max_partitions is not None and processed >= max_partitions:
+                break
+        return processed
 
     def _prepare_pending(self, progress: PartitionProgress) -> PendingBatch:
         valid_messages: list[Any] = []
@@ -260,14 +285,15 @@ class PartitionIsolatingBatchWorker:
                     pending.stage = "dlq"
                     continue
                 commit_through(self.consumer, pending.valid_messages[-1])
+                committed_count = len(pending.valid_messages)
                 self._remove_committed_prefix(progress, pending.valid_messages)
+                self.completed_records += committed_count
                 pending.valid_messages.clear()
                 pending.points.clear()
                 if pending.invalid_message is not None:
                     pending.stage = "dlq"
                 else:
                     progress.pending = None
-                    self.completed_records += 1
                     return
             elif pending.stage == "dlq":
                 if pending.invalid_message is None:
@@ -276,15 +302,11 @@ class PartitionIsolatingBatchWorker:
                 message = pending.invalid_message
                 try:
                     payload = legacy.decode_message(message.value)
-                    error = ValueError("record rejected by telemetry validation")
+                    legacy.build_point(payload)
                 except (ValueError, TypeError, UnicodeDecodeError) as exc:
                     error = exc
                 else:
-                    # A point-construction error is also a permanent record error.
-                    try:
-                        legacy.build_point(payload)
-                    except (ValueError, TypeError, UnicodeDecodeError) as exc:
-                        error = exc
+                    error = ValueError("record rejected by telemetry validation")
                 legacy.dead_letter(self.dlq_producer, message, error)
                 pending.stage = "commit_dlq"
             elif pending.stage == "commit_dlq":
@@ -293,8 +315,8 @@ class PartitionIsolatingBatchWorker:
                     raise RuntimeError("DLQ commit stage has no invalid record")
                 commit_through(self.consumer, message)
                 self._remove_committed_prefix(progress, [message])
+                self.completed_records += 1
                 progress.pending = None
-                self.completed_records += len(pending.valid_messages) + 1
                 return
             else:
                 raise RuntimeError(f"Unknown pending partition stage: {pending.stage}")
@@ -330,33 +352,8 @@ class PartitionIsolatingBatchWorker:
             logger.info("Resumed partition topic=%s partition=%s", tp.topic, tp.partition)
 
 
-def create_batch_consumer(listener: PartitionIsolatingBatchWorker) -> Any:
-    """Create a manually committed consumer with rebalance callbacks."""
-    logger.info("Connecting batch consumer broker=%s topic=%s", legacy.KAFKA_BROKER, legacy.SENSOR_TOPIC)
-    for attempt in range(30):
-        try:
-            consumer = legacy.KafkaConsumer(
-                bootstrap_servers=legacy.KAFKA_BROKER,
-                group_id=legacy.CONSUMER_GROUP,
-                value_deserializer=lambda value: value,
-                auto_offset_reset="earliest",
-                enable_auto_commit=False,
-                max_poll_records=legacy.MAX_POLL_RECORDS,
-                max_poll_interval_ms=legacy.MAX_POLL_INTERVAL_MS,
-            )
-            consumer.subscribe(topics=[legacy.SENSOR_TOPIC], listener=listener)
-            logger.info("Batch Kafka consumer connected")
-            return consumer
-        except KafkaError:
-            logger.exception("Batch Kafka connection failed attempt=%d", attempt + 1)
-            if attempt < 29:
-                time.sleep(2)
-    raise RuntimeError("Batch Kafka connection failed after 30 attempts")
-
-
 def run() -> None:
     require_safe_config()
-    # Create the consumer first, then attach the worker as its rebalance listener.
     consumer = legacy.KafkaConsumer(
         bootstrap_servers=legacy.KAFKA_BROKER,
         group_id=legacy.CONSUMER_GROUP,
@@ -382,7 +379,16 @@ def run() -> None:
                 timeout_ms=legacy.POLL_TIMEOUT_MS,
                 max_records=legacy.MAX_POLL_RECORDS,
             )
-            worker.process_polled_records(records)
+            worker.enqueue_polled_records(records)
+            worker.process_ready(max_partitions=1)
+            # Drain already-fetched batches fairly, polling between each
+            # synchronous storage operation to service group heartbeats.
+            while True:
+                more = consumer.poll(timeout_ms=0, max_records=legacy.MAX_POLL_RECORDS)
+                worker.enqueue_polled_records(more)
+                processed = worker.process_ready(max_partitions=1)
+                if not more and processed == 0:
+                    break
             if worker.completed_records and worker.completed_records % 100 == 0:
                 logger.info("Completed source records=%d", worker.completed_records)
     except KeyboardInterrupt:
