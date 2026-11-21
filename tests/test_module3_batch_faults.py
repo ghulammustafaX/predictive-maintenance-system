@@ -120,6 +120,14 @@ def _partition_worker(batch_size=2, clock=None):
     consumer.paused.side_effect = lambda: set(paused)
     consumer.pause.side_effect = lambda *partitions: paused.update(partitions)
     consumer.resume.side_effect = lambda *partitions: [paused.discard(tp) for tp in partitions]
+    successful_commits = []
+
+    def record_commit(offsets, timeout_ms):
+        tp, metadata = next(iter(offsets.items()))
+        successful_commits.append((tp.partition, metadata.offset))
+
+    consumer.commit.side_effect = record_commit
+    consumer._successful_commits = successful_commits
     worker = PartitionIsolatingBatchWorker(
         consumer, writer, dlq, batch_size=batch_size,
         retry_base_seconds=2, retry_max_seconds=8,
@@ -143,11 +151,7 @@ def _message_for_run(offset, partition, run_id, valid=True):
 
 
 def _committed_partition_offsets(consumer):
-    commits = []
-    for call in consumer.commit.call_args_list:
-        tp, metadata = next(iter(call.args[0].items()))
-        commits.append((tp.partition, metadata.offset))
-    return commits
+    return list(consumer._successful_commits)
 
 
 def test_failed_partition_is_paused_while_healthy_partition_commits():
@@ -191,13 +195,16 @@ def test_commit_retry_does_not_rewrite_confirmed_batch_or_block_other_partition(
     )
     failed_commit_once = [False]
 
-    def commit(offsets, timeout_ms):
-        tp = next(iter(offsets))
+    successful_commits = consumer._successful_commits
+
+    def commit_and_record(offsets, timeout_ms):
+        tp, metadata = next(iter(offsets.items()))
         if tp == tp0 and not failed_commit_once[0]:
             failed_commit_once[0] = True
             raise TimeoutError("partition 0 commit response lost")
+        successful_commits.append((tp.partition, metadata.offset))
 
-    consumer.commit.side_effect = commit
+    consumer.commit.side_effect = commit_and_record
     worker.process_polled_records({
         tp0: [_message_for_run(0, 0, "commit-p0"), _message_for_run(1, 0, "commit-p0")],
         tp1: [_message_for_run(0, 1, "commit-p1"), _message_for_run(1, 1, "commit-p1")],
