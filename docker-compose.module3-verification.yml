@@ -49,6 +49,7 @@ services:
         kafka-topics --bootstrap-server kafka:9092 --create --topic m3-e2e-batch-telemetry --partitions 1 --replication-factor 1
         kafka-topics --bootstrap-server kafka:9092 --create --topic m3-inflight-telemetry --partitions 1 --replication-factor 1
         kafka-topics --bootstrap-server kafka:9092 --create --topic m3-rebalance-telemetry --partitions 2 --replication-factor 1
+        kafka-topics --bootstrap-server kafka:9092 --create --topic m3-partition-fault-telemetry --partitions 2 --replication-factor 1
 
   influxdb:
     image: influxdb:2.7
@@ -400,6 +401,57 @@ services:
       INFLUXDB_ORG: m3-isolated-org
       INFLUXDB_BUCKET: m3-isolated-bucket
 
+
+  partition-fault-worker:
+    build: ./ingestion
+    command: ["python", "/tests/module3_partition_fault_worker.py"]
+    restart: "no"
+    volumes:
+      - ./tests/module3_partition_fault_worker.py:/tests/module3_partition_fault_worker.py:ro
+      - m3-partition-fault-coordination:/coordination
+    depends_on:
+      topic-init:
+        condition: service_completed_successfully
+      influxdb:
+        condition: service_healthy
+    environment:
+      MODULE3_PARTITION_FAULT_GUARD: m3-isolated-partition-fault-only
+      PMS_BATCH_WORKER_CONFIRM: opt-in-isolated-batch-worker
+      PMS_INFLUX_BATCH_SIZE: "3"
+      PMS_PARTITION_RETRY_BASE_SECONDS: "0.5"
+      PMS_PARTITION_RETRY_MAX_SECONDS: "1"
+      KAFKA_MAX_POLL_RECORDS: "12"
+      KAFKA_BROKER: kafka:9092
+      SENSOR_TOPIC: m3-partition-fault-telemetry
+      DEAD_LETTER_TOPIC: m3-isolated-dead-letter
+      CONSUMER_GROUP: m3-partition-fault-group
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: m3-isolated-token
+      INFLUXDB_ORG: m3-isolated-org
+      INFLUXDB_BUCKET: m3-isolated-bucket
+
+  partition-fault-verifier:
+    build: ./ingestion
+    entrypoint: ["python", "/tests/module3_partition_fault_probe.py"]
+    volumes:
+      - ./tests/module3_partition_fault_probe.py:/tests/module3_partition_fault_probe.py:ro
+      - m3-partition-fault-coordination:/coordination
+    depends_on:
+      topic-init:
+        condition: service_completed_successfully
+      influxdb:
+        condition: service_healthy
+    environment:
+      MODULE3_PARTITION_FAULT_PROBE_GUARD: m3-isolated-partition-fault-probe-only
+      KAFKA_BROKER: kafka:9092
+      SENSOR_TOPIC: m3-partition-fault-telemetry
+      CONSUMER_GROUP: m3-partition-fault-group
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: m3-isolated-token
+      INFLUXDB_ORG: m3-isolated-org
+      INFLUXDB_BUCKET: m3-isolated-bucket
+
 volumes:
   m3-rebalance-coordination:
+  m3-partition-fault-coordination:
 
