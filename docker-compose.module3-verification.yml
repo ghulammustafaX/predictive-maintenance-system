@@ -195,3 +195,19 @@ services:
         condition: service_completed_successfully
       influxdb:
         condition: service_healthy
+ 
+  write-benchmark:
+    build: ./backend
+    entrypoint: ["python", "/tests/module3_write_benchmark.py"]
+    volumes:
+      - ./tests/module3_write_benchmark.py:/tests/module3_write_benchmark.py:ro
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      MODULE3_BENCH_GUARD: m3-isolated-write-benchmark-only
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: m3-isolated-token
+      INFLUXDB_ORG: m3-isolated-org
+      INFLUXDB_BUCKET: m3-isolated-bucket
+

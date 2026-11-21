@@ -173,6 +173,9 @@ jobs:
         run: |
           docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml up -d --no-deps --build batch-worker
           docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml run --rm --no-deps batch-verifier
+      - name: Measure single versus batched InfluxDB writes on isolated instance
+        run: |
+          docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml run --rm --no-deps write-benchmark
       - name: Save isolated stack logs on failure
         if: failure()
         run: |
