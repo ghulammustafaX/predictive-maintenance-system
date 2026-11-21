@@ -186,6 +186,19 @@ jobs:
           "${compose[@]}" run --rm --no-deps e2e-verifier during-outage
           "${compose[@]}" up -d --no-deps --no-recreate e2e-batch-worker
           "${compose[@]}" run --rm --no-deps e2e-verifier after-restart
+      - name: Verify crash after Influx write acknowledgment before Kafka commit
+        run: |
+          set -euo pipefail
+          compose=(docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml)
+          "${compose[@]}" up -d --no-deps --build inflight-kill-worker
+          "${compose[@]}" run --rm --no-deps inflight-verifier publish
+          "${compose[@]}" run --rm --no-deps inflight-verifier before-restart
+          "${compose[@]}" logs --no-color inflight-kill-worker | grep -F 'M3_FAULT_AFTER_INFLUX_ACK_BEFORE_KAFKA_COMMIT'
+          container_id=$("${compose[@]}" ps -a -q inflight-kill-worker)
+          test -n "$container_id"
+          test "$(docker inspect "$container_id" --format '{{.State.ExitCode}}')" = 137
+          "${compose[@]}" up -d --no-deps --build inflight-recovery-worker
+          "${compose[@]}" run --rm --no-deps inflight-verifier after-recovery
       - name: Save isolated stack logs on failure
         if: failure()
         run: |
