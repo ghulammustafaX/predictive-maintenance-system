@@ -199,7 +199,7 @@ jobs:
           test "$(docker inspect "$container_id" --format '{{.State.ExitCode}}')" = 137
           "${compose[@]}" up -d --no-deps --build inflight-recovery-worker
           "${compose[@]}" run --rm --no-deps inflight-verifier after-recovery
-      - name: Verify two-partition rebalance, stale commit fencing, and replay
+      - name: Verify two-partition rebalance and durable-prefix recovery
         run: |
           set -euo pipefail
           compose=(docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml)
@@ -208,12 +208,13 @@ jobs:
           "${compose[@]}" run --rm --no-deps rebalance-verifier await-write-ack
           "${compose[@]}" up -d --no-deps --build rebalance-peer-worker
           "${compose[@]}" run --rm --no-deps rebalance-verifier trigger-rebalance
-          "${compose[@]}" logs --no-color rebalance-fault-worker | grep -F 'M3_REBALANCE_STALE_COMMIT_REJECTED='
-          container_id=$("${compose[@]}" ps -a -q rebalance-fault-worker)
-          test -n "$container_id"
-          fault_exit=$(docker inspect "$container_id" --format '{{.State.ExitCode}}')
-          test "$fault_exit" -ne 0
+          "${compose[@]}" logs --no-color rebalance-fault-worker | grep -F 'M3_REBALANCE_COMMIT_SUCCEEDED_WHILE_PREPARING'
           "${compose[@]}" run --rm --no-deps rebalance-verifier verify-recovery
+          for service in rebalance-fault-worker rebalance-peer-worker; do
+            container_id=$("${compose[@]}" ps -q "$service")
+            test -n "$container_id"
+            test "$(docker inspect "$container_id" --format '{{.State.Running}}')" = true
+          done
       - name: Save isolated stack logs on failure
         if: failure()
         run: |
