@@ -34,23 +34,15 @@ sys.path.insert(0, str(SRC))
 sys.path.insert(0, str(ROOT))   # so 'from ml.xxx import' works
 
 ARTIFACT_DIR = ROOT / "ml" / "saved_v2_a1" / "scalers"
-DATA_DIR     = ROOT / "simulator" / "data" / "cmapss"
 
 
-def _artifacts_available() -> bool:
-    return (ARTIFACT_DIR / "scaler_FD001.pkl").exists()
+@pytest.fixture(autouse=True)
+def _synthetic_scaler_artifacts(tmp_path, monkeypatch):
+    """Give each test deterministic scalers without requiring private PKLs."""
+    from preprocessing_test_artifacts import create_synthetic_preprocessing_artifacts
 
-
-def _data_available() -> bool:
-    return (DATA_DIR / "train_FD001.txt").exists()
-
-
-SKIP_NO_ARTIFACTS = pytest.mark.skipif(
-    not _artifacts_available(), reason="Preprocessing artifacts not found"
-)
-SKIP_NO_DATA = pytest.mark.skipif(
-    not _data_available(), reason="CMAPSS data not found"
-)
+    artifact_dir = create_synthetic_preprocessing_artifacts(tmp_path, ROOT)
+    monkeypatch.setattr(sys.modules[__name__], "ARTIFACT_DIR", artifact_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +102,6 @@ def _make_preprocessor():
 
 class TestSchemaCompatibility:
 
-    @SKIP_NO_ARTIFACTS
     def test_new_envelope_accepted_by_validate_message(self) -> None:
         """_validate_message() must not raise on a full new-envelope payload."""
         from ml.streaming.preprocessing import StreamingPreprocessor
