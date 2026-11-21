@@ -223,6 +223,8 @@ jobs:
           "${compose[@]}" up -d --no-deps --build partition-fault-worker
           "${compose[@]}" run --rm --no-deps partition-fault-verifier verify
           "${compose[@]}" logs --no-color partition-fault-worker | grep -F 'M3_PARTITION_FAULT_P0_WRITE_INJECTED'
+          "${compose[@]}" logs --no-color partition-fault-worker | grep -F 'M3_PARTITION_ALERT topic=m3-partition-fault-telemetry partition=0'
+          "${compose[@]}" logs --no-color partition-fault-worker | grep -F 'M3_PARTITION_RECOVERED topic=m3-partition-fault-telemetry partition=0'
           container_id=$("${compose[@]}" ps -q partition-fault-worker)
           test -n "$container_id"
           test "$(docker inspect "$container_id" --format '{{.State.Running}}')" = true
