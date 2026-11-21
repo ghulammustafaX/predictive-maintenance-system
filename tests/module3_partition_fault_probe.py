@@ -28,6 +28,7 @@ for key, value in EXPECTED.items():
 
 COORDINATION = Path("/coordination")
 FAILURE_MARKER = COORDINATION / "partition0_write_failed"
+FAILURE_COUNT = COORDINATION / "partition0_failure_count"
 RELEASE_MARKER = COORDINATION / "release_partition0"
 RUN_P0 = "m3-partition-fault-p0"
 RUN_P1 = "m3-partition-fault-p1"
@@ -97,6 +98,7 @@ def wait_for(predicate, description: str, timeout: int = 90) -> None:
 def prepare() -> None:
     COORDINATION.mkdir(parents=True, exist_ok=True)
     FAILURE_MARKER.unlink(missing_ok=True)
+    FAILURE_COUNT.unlink(missing_ok=True)
     RELEASE_MARKER.unlink(missing_ok=True)
     print("PASS: isolated coordination markers reset", flush=True)
 
@@ -120,7 +122,10 @@ def verify() -> None:
             producer.send(EXPECTED["SENSOR_TOPIC"], value=event(1, cycle), key=f"{RUN_P1}-{cycle}".encode(), partition=1).get(timeout=20)
         producer.flush()
 
-        wait_for(lambda: FAILURE_MARKER.exists(), "partition 0 injected output failure")
+        wait_for(
+            lambda: FAILURE_COUNT.exists() and int(FAILURE_COUNT.read_text(encoding="utf-8")) >= 3,
+            "three repeated partition 0 output failures",
+        )
 
         def healthy_partition_only():
             offsets = committed_offsets()
@@ -138,8 +143,11 @@ def verify() -> None:
         assert before[0] in (None, 0) and before[1] == 3, before
         assert len(points_for(client, RUN_P0)) == 0
         assert len(points_for(client, RUN_P1)) == 3
-        print("PASS: partition 0 stayed uncommitted and produced no points during its injected outage", flush=True)
+        print("PASS: partition 0 stayed uncommitted with no points after three repeated write failures", flush=True)
         print("PASS: healthy partition 1 committed offset 3 and persisted all three points", flush=True)
+
+        assert int(FAILURE_COUNT.read_text(encoding="utf-8")) >= 3
+        print("PASS: repeated partition-local failures did not block healthy partition progress", flush=True)
 
         RELEASE_MARKER.write_text("release\n", encoding="utf-8")
 
