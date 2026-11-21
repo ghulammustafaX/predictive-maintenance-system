@@ -9,20 +9,21 @@ The existing `ingestion/src/kafka_consumer.py` is the **accepted Module 02 basel
 - **No Kafka offset is committed until the entire valid batch has been acknowledged by InfluxDB**. Each partition's commit advances only to the offset following its last fully handled record.
 - A malformed input is a barrier: write and commit any earlier valid batch, send the malformed record to the DLQ with confirmed broker acknowledgement, then commit that record. Processing later messages cannot skip over an unhandled record.
 - A failed/ambiguous Influx write or failed offset commit stops processing rather than acknowledging unwritten data. Replay can produce at-least-once duplicate attempts; deterministic Influx point identity gives same-point overwrite/merge behavior, not a cross-system exactly-once transaction.
-- Synchronous bounded retries use the accepted consumer's retry count/backoff. 401/403 are not retried.
+- The long-running opt-in worker retries each failed partition independently with bounded exponential backoff. It pauses only the failing partition and continues polling/processing healthy partitions. A confirmed InfluxDB write followed by a failed Kafka commit retries the commit stage without rewriting the batch while the worker retains ownership. The direct `handle_partition` compatibility helper retains bounded synchronous retries for focused tests.
 - The opt-in worker requires `PMS_BATCH_WORKER_CONFIRM=opt-in-isolated-batch-worker` and `KAFKA_MAX_POLL_RECORDS >= PMS_INFLUX_BATCH_SIZE`.
 
 **Important:** The batch worker must NEVER run concurrently with the legacy worker in a different consumer group on the same production topic. Switching active consumers, offsets, consumer-group identity, live credentials, or deployment requires separate operational approval and a recovery plan. The string guard is an explicit opt-in guard, not a production authorization mechanism.
 
 ## What is verified
 
-- Offline tests cover bounded batch sizes, offset commits after successful writes, invalid-message DLQ boundaries, failure without commit, no processing after commit error, 401 behavior, and opt-in startup.
+- Offline tests cover bounded batch sizes, offset commits after successful writes, invalid-message DLQ boundaries, failure without commit, no processing after commit error, 401 behavior, opt-in startup, per-partition pause/resume, independent healthy-partition progress, commit-stage retry without a second write, DLQ-stage retry and revocation cleanup.
 - Real isolated CI uses its own `m3-batch-telemetry` topic, `m3-batch-dead-letter` topic and `m3-batch-writer-group` alongside the already-tested legacy consumer. It publishes valid records, one invalid record and an exact replay, then checks Influx persisted identities, DLQ publication and committed offset.
+- A second isolated two-partition Kafka/InfluxDB scenario injects an output failure for partition 0, proves partition 1 commits and persists while partition 0 remains uncommitted, then releases partition 0 and verifies both partitions recover without skipped cycles. See [partition-specific failure isolation](MODULE3_PARTITION_FAILURE_ISOLATION.md).
 - CI runs the existing 251-test regression and 4 MQTT/Kafka integration tests plus the existing Module 03 storage, query and bucket-policy probes.
 
 ## Limits and remaining gates
 
-This feature is **not automatically enabled in production** and has not established a real throughput improvement. Before considering rollout, benchmark an identical workload using the same isolated hardware, measure records/second, write latency, retry rates and resource use, and repeat crash/rebalance/partial-write failure recovery tests. Validate behavior under multiple partitions and different message ordering. Require operator approval and a plan for safe group handoff. No production data, volumes, checkpoints or offsets should be reset or touched by these experiments.
+This feature is **not automatically enabled in production** and has not established a real throughput improvement. Before considering rollout, benchmark an identical workload using the same isolated hardware, measure records/second, write latency, retry rates and resource use, and repeat crash/rebalance/partial-write failure recovery tests. Validate behavior under multiple partitions and different message ordering. The new partition-isolation tests are an acceptance increment, not a production deployment authorization. Require operator approval and a plan for safe group handoff. No production data, volumes, checkpoints or offsets should be reset or touched by these experiments.
 
 ## Rollback
 
