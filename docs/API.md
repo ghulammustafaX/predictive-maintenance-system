@@ -228,10 +228,10 @@ Returns bounded sensor telemetry for one engine, downsampled to `points` rows.
 
 | Param | Default | Description |
 |---|---|---|
-| `channels` | all | Comma-separated sensor names e.g. `time_cycles,sensor_2,sensor_14` |
+| `channels` | all | Comma-separated sensor names e.g. `time_cycles,sensor_2,sensor_14` |\n| `run_id` | all runs | Optional validated run ID. When omitted, rows from multiple runs can appear, each with its own `run_id` |
 | `from` | now − 1 h | ISO-8601 start time |
 | `to` | now | ISO-8601 end time |
-| `points` | 500 | Max rows to return (1–5000) |
+| `points` | 500 | Maximum returned rows (1–5000), with Flux last-value aggregation per dataset, engine, run and selected field |
 
 **Response** `200`
 ```json

@@ -160,6 +160,9 @@ jobs:
       - name: Exercise real Kafka consumer and InfluxDB storage
         run: |
           docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml run --rm --no-deps verifier
+      - name: Verify bounded Flux queries against isolated real InfluxDB
+        run: |
+          docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml run --rm --no-deps query-verifier
       - name: Save isolated stack logs on failure
         if: failure()
         run: |

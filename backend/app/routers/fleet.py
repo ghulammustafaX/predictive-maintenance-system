@@ -22,6 +22,7 @@ INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET", "sensor-data")
 MEASUREMENT = "sensor_telemetry"
 DEFAULT_DATASET_ID = "FD001"
 ENGINE_ID_PATTERN = re.compile(r"^(FD00[1-4])-(\d{1,6})$")
+RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 ALLOWED_CHANNELS = {"time_cycles", *(f"sensor_{index}" for index in range(1, 22)), *(f"operational_setting_{index}" for index in range(1, 4))}
 MAX_POINTS = 5_000
 DEFAULT_POINTS = 500
@@ -61,6 +62,12 @@ def _unit_tag_filter(unit_id: str) -> str:
         f'r.unit_id == "{variant}"'
         for variant in (str(numeric_id), f"{numeric_id}.0", f"{numeric_id:03d}")
     )
+
+
+def _safe_run_id(run_id: str | None) -> str | None:
+    if run_id is not None and not RUN_ID_PATTERN.fullmatch(run_id):
+        raise HTTPException(status_code=422, detail="run_id contains unsupported characters")
+    return run_id
 
 
 def _safe_channels(channels: str | None) -> list[str]:
@@ -170,6 +177,37 @@ def fleet_status(user: User = Depends(require_role(UserRole.ADMIN, UserRole.MAIN
         client.close()
 
 
+def _telemetry_query(
+    dataset_id: str,
+    unit_id: str,
+    selected_channels: list[str],
+    start_at: datetime,
+    end_at: datetime,
+    points: int,
+    run_id: str | None,
+) -> str:
+    """Return a bounded Flux query that aggregates *across* per-cycle series.
+
+    The current writer stores cycle as a tag. Grouping by selected tags,
+    excluding cycle, is required to reduce points within each run.
+    """
+    window_seconds = max(1, int((end_at - start_at).total_seconds() / points))
+    fields = " or ".join(f'r._field == "{channel}"' for channel in selected_channels)
+    run_filter = f'  |> filter(fn: (r) => r.run_id == "{run_id}")\n' if run_id is not None else ""
+    return f'''from(bucket: "{INFLUXDB_BUCKET}")
+  |> range(start: {_flux_time(start_at)}, stop: {_flux_time(end_at)})
+  |> filter(fn: (r) => r._measurement == "{MEASUREMENT}" and ({_unit_tag_filter(unit_id)}) and ({fields}))
+  |> map(fn: (r) => ({{ r with dataset_id: if exists r.dataset_id then r.dataset_id else "{DEFAULT_DATASET_ID}", run_id: if exists r.run_id then r.run_id else "legacy" }}))
+  |> filter(fn: (r) => r.dataset_id == "{dataset_id}")
+{run_filter}  |> group(columns: ["dataset_id", "unit_id", "run_id", "_field"])
+  |> aggregateWindow(every: {window_seconds}s, fn: last, createEmpty: false, timeSrc: "_time", timeDst: "_time")
+  |> pivot(rowKey: ["_time", "dataset_id", "unit_id", "run_id"], columnKey: ["_field"], valueColumn: "_value")
+  |> group(columns: [])
+  |> sort(columns: ["_time"])
+  |> limit(n: {points})
+'''
+
+
 @router.get("/api/engines/{engine_id}/telemetry")
 def engine_telemetry(
     engine_id: str,
@@ -177,25 +215,15 @@ def engine_telemetry(
     start: datetime | None = Query(default=None, alias="from"),
     end: datetime | None = Query(default=None, alias="to"),
     points: int = Query(default=DEFAULT_POINTS, ge=1, le=MAX_POINTS),
+    run_id: str | None = Query(default=None, max_length=128),
     user: User = Depends(require_role(UserRole.ADMIN, UserRole.MAINTENANCE_ENGINEER, UserRole.FLOOR_OPERATOR, UserRole.VIEWER)),
 ) -> dict[str, Any]:
     dataset_id, unit_id = _engine_parts(engine_id)
     selected_channels = _safe_channels(channels)
     start_at, end_at = _parse_time_range(start, end)
-    window_seconds = max(1, int((end_at - start_at).total_seconds() / points))
-    fields = " or ".join(f'r._field == "{channel}"' for channel in selected_channels)
-    query = f'''from(bucket: "{INFLUXDB_BUCKET}")
-  |> range(start: {_flux_time(start_at)}, stop: {_flux_time(end_at)})
-  |> filter(fn: (r) => r._measurement == "{MEASUREMENT}" and ({_unit_tag_filter(unit_id)}) and ({fields}))
-  |> map(fn: (r) => ({{ r with dataset_id: if exists r.dataset_id then r.dataset_id else "{DEFAULT_DATASET_ID}", run_id: if exists r.run_id then r.run_id else "legacy" }}))
-  |> filter(fn: (r) => r.dataset_id == "{dataset_id}")
-  // Keep the last real observation in each downsample window. `timeDst` prevents
-  // aggregateWindow from overwriting the source `_time` with a bucket boundary.
-  |> aggregateWindow(every: {window_seconds}s, fn: last, createEmpty: false, timeSrc: "_time", timeDst: "bucket_time")
-  |> pivot(rowKey: ["_time", "dataset_id", "unit_id", "run_id"], columnKey: ["_field"], valueColumn: "_value")
-  |> sort(columns: ["_time"])
-  |> limit(n: {points})
-'''
+    safe_run_id = _safe_run_id(run_id)
+    query = _telemetry_query(dataset_id, unit_id, selected_channels, start_at, end_at, points, safe_run_id)
+
     client = get_client()
     try:
         mapped_points = []

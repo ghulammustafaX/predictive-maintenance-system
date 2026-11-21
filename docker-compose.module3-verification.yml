@@ -100,3 +100,20 @@ services:
       INFLUXDB_TOKEN: m3-isolated-token
       INFLUXDB_ORG: m3-isolated-org
       INFLUXDB_BUCKET: m3-isolated-bucket
+
+  query-verifier:
+    build: ./backend
+    entrypoint: ["python", "/tests/module3_query_probe.py"]
+    volumes:
+      - ./tests/module3_query_probe.py:/tests/module3_query_probe.py:ro
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      MODULE3_TEST_GUARD: m3-isolated-query-only
+      PYTHONPATH: /app
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: m3-isolated-token
+      INFLUXDB_ORG: m3-isolated-org
+      INFLUXDB_BUCKET: m3-isolated-bucket
+      DATABASE_URL: sqlite:////tmp/module3-query-verifier.sqlite
