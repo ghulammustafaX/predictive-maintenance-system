@@ -276,7 +276,10 @@ services:
   
   inflight-kill-worker:
     build: ./ingestion
-    entrypoint: ["python", "/tests/module3_inflight_kill_worker.py"]
+    # The faulting Python process must NOT be PID 1 in its PID namespace:
+    # Docker's init process has special Linux signal semantics. The shell
+    # waits for the child and propagates the child SIGKILL exit code 137.
+    entrypoint: ["sh", "-c", "python /tests/module3_inflight_kill_worker.py & wait $!"]
     restart: "no"
     volumes:
       - ./tests/module3_inflight_kill_worker.py:/tests/module3_inflight_kill_worker.py:ro
