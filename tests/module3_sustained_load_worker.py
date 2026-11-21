@@ -95,6 +95,7 @@ def make_summary(
     ended_at: float,
     e2e_ms: list[float],
     write_ms: list[float],
+    write_batch_sizes: list[int],
     commit_ms: list[float],
     offsets: dict[str, Any],
     cpu_before: float,
@@ -123,6 +124,13 @@ def make_summary(
             "p99": percentile(write_ms, 0.99),
             "calls": len(write_ms),
         },
+        "points_per_write": {
+            "average": round(sum(write_batch_sizes) / len(write_batch_sizes), 3) if write_batch_sizes else 0,
+            "p50": percentile([float(size) for size in write_batch_sizes], 0.50),
+            "p95": percentile([float(size) for size in write_batch_sizes], 0.95),
+            "max": max(write_batch_sizes, default=0),
+            "calls": len(write_batch_sizes),
+        },
         "commit_latency_ms": {
             "p50": percentile(commit_ms, 0.50),
             "p95": percentile(commit_ms, 0.95),
@@ -140,6 +148,7 @@ def run_legacy() -> dict[str, Any]:
     client = None
     producer = None
     write_ms: list[float] = []
+    write_batch_sizes: list[int] = []
     commit_ms: list[float] = []
     e2e_ms: list[float] = []
     count = 0
@@ -166,6 +175,7 @@ def run_legacy() -> dict[str, Any]:
             before = time.perf_counter()
             result = original_write(write_api_arg, payload)
             write_ms.append((time.perf_counter() - before) * 1000)
+            write_batch_sizes.append(1)
             return result
 
         def measured_commit(consumer_arg: Any, message: Any) -> None:
@@ -205,7 +215,7 @@ def run_legacy() -> dict[str, Any]:
             raise AssertionError(f"legacy consumer completed with lag: {offsets}")
         ended_at = time.monotonic()
         return make_summary(
-            count, started_at, ended_at, e2e_ms, write_ms, commit_ms,
+            count, started_at, ended_at, e2e_ms, write_ms, write_batch_sizes, commit_ms,
             offsets, cpu_before, rss_before_kb,
         )
     finally:
@@ -255,6 +265,7 @@ def run_batch() -> dict[str, Any]:
             before = time.perf_counter()
             original_persist(write_api_arg, points)
             write_ms.append((time.perf_counter() - before) * 1000)
+            write_batch_sizes.append(len(points))
 
         def measured_commit(consumer_arg: Any, message: Any) -> None:
             before = time.perf_counter()
@@ -297,7 +308,8 @@ def run_batch() -> dict[str, Any]:
             raise AssertionError(f"batch consumer completed with lag: {offsets}")
         ended_at = time.monotonic()
         summary = make_summary(
-            worker.completed_records, started_at, ended_at, e2e_ms, write_ms, commit_ms,
+            worker.completed_records, started_at, ended_at, e2e_ms, write_ms,
+            write_batch_sizes, commit_ms,
             offsets, cpu_before, rss_before_kb,
         )
         return summary
