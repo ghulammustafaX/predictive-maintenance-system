@@ -86,7 +86,6 @@ jobs:
                   consumer = KafkaConsumer(
                       bootstrap_servers=os.environ["KAFKA_HOST"],
                       request_timeout_ms=3000,
-                      api_version_auto_timeout_ms=3000,
                   )
                   topics = consumer.topics()
                   consumer.close()
