@@ -229,6 +229,8 @@ def run_batch() -> dict[str, Any]:
     client = None
     producer = None
     write_ms: list[float] = []
+    write_batch_sizes: list[int] = []
+    measurement_errors: list[str] = []
     commit_ms: list[float] = []
     e2e_ms: list[float] = []
     started_at: float | None = None
@@ -236,6 +238,9 @@ def run_batch() -> dict[str, Any]:
     cpu_before = cpu_before_usage.ru_utime + cpu_before_usage.ru_stime
     rss_before_kb = int(cpu_before_usage.ru_maxrss)
     deadline = time.monotonic() + MAX_RUNTIME_SECONDS
+    original_persist = None
+    original_commit = None
+    original_remove = None
 
     try:
         client, write_api = legacy.create_influxdb_client()
@@ -264,8 +269,13 @@ def run_batch() -> dict[str, Any]:
         def measured_persist(write_api_arg: Any, points: Any) -> None:
             before = time.perf_counter()
             original_persist(write_api_arg, points)
-            write_ms.append((time.perf_counter() - before) * 1000)
-            write_batch_sizes.append(len(points))
+            # Never surface instrumentation errors as failed Influx writes: the
+            # write has already succeeded and the worker must not retry it.
+            try:
+                write_batch_sizes.append(len(points))
+                write_ms.append((time.perf_counter() - before) * 1000)
+            except Exception as exc:
+                measurement_errors.append(f"{type(exc).__name__}: {exc}")
 
         def measured_commit(consumer_arg: Any, message: Any) -> None:
             before = time.perf_counter()
@@ -296,10 +306,16 @@ def run_batch() -> dict[str, Any]:
             )
             worker.enqueue_polled_records(records)
             worker.process_ready(max_partitions=1)
+            if measurement_errors:
+                raise RuntimeError(f"batch write measurement failed: {measurement_errors[0]}")
             while True:
+                if time.monotonic() > deadline:
+                    raise TimeoutError(f"batch worker timed out after {worker.completed_records} records")
                 more = consumer.poll(timeout_ms=0, max_records=legacy.MAX_POLL_RECORDS)
                 worker.enqueue_polled_records(more)
                 processed = worker.process_ready(max_partitions=1)
+                if measurement_errors:
+                    raise RuntimeError(f"batch write measurement failed: {measurement_errors[0]}")
                 if not more and processed == 0:
                     break
 
@@ -314,6 +330,12 @@ def run_batch() -> dict[str, Any]:
         )
         return summary
     finally:
+        if original_persist is not None:
+            batch.persist_points = original_persist
+        if original_commit is not None:
+            batch.commit_through = original_commit
+        if original_remove is not None:
+            batch.PartitionIsolatingBatchWorker._remove_committed_prefix = staticmethod(original_remove)
         producer and producer.close()
         consumer.close()
         client and client.close()
