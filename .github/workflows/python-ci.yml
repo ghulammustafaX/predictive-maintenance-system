@@ -184,7 +184,7 @@ jobs:
           "${compose[@]}" run --rm --no-deps e2e-verifier benchmark
           "${compose[@]}" kill -s SIGKILL e2e-batch-worker
           "${compose[@]}" run --rm --no-deps e2e-verifier during-outage
-          "${compose[@]}" start e2e-batch-worker
+          "${compose[@]}" up -d --no-deps --no-recreate e2e-batch-worker
           "${compose[@]}" run --rm --no-deps e2e-verifier after-restart
       - name: Save isolated stack logs on failure
         if: failure()
