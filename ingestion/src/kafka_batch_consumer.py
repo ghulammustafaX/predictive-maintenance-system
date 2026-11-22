@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
+import signal
+import sys
 import time
 from collections import deque
 from collections.abc import Sequence
@@ -33,6 +36,9 @@ RETRY_MAX_SECONDS = float(os.getenv("PMS_PARTITION_RETRY_MAX_SECONDS", "30"))
 ALERT_RETRY_THRESHOLD = int(os.getenv("PMS_PARTITION_ALERT_RETRY_THRESHOLD", "3"))
 ALERT_AGE_SECONDS = float(os.getenv("PMS_PARTITION_ALERT_AGE_SECONDS", "60"))
 METRICS_LOG_SECONDS = float(os.getenv("PMS_PARTITION_METRICS_LOG_SECONDS", "60"))
+SHUTDOWN_DRAIN_SECONDS = float(os.getenv("PMS_BATCH_SHUTDOWN_DRAIN_SECONDS", "30"))
+CLEANUP_SECONDS = float(os.getenv("PMS_BATCH_CLEANUP_SECONDS", "5"))
+DLQ_MAX_BLOCK_MS = int(os.getenv("PMS_BATCH_DLQ_MAX_BLOCK_MS", "10000"))
 
 
 def require_safe_config() -> None:
@@ -48,6 +54,12 @@ def require_safe_config() -> None:
         raise ValueError("Partition alert thresholds must be positive")
     if METRICS_LOG_SECONDS < 0:
         raise ValueError("Partition metrics log interval cannot be negative")
+    if not math.isfinite(SHUTDOWN_DRAIN_SECONDS) or SHUTDOWN_DRAIN_SECONDS <= 0:
+        raise ValueError("Shutdown drain deadline must be positive")
+    if not math.isfinite(CLEANUP_SECONDS) or CLEANUP_SECONDS <= 0:
+        raise ValueError("Cleanup budget must be positive")
+    if legacy.INFLUX_TIMEOUT_MS <= 0 or legacy.COMMIT_TIMEOUT_MS <= 0 or DLQ_MAX_BLOCK_MS <= 0:
+        raise ValueError("Influx, Kafka commit and DLQ timeouts must be positive")
 
 
 def persist_points(write_api: Any, points: Sequence[Any]) -> None:
@@ -189,6 +201,11 @@ class PartitionIsolatingBatchWorker(ConsumerRebalanceListener):
         self.alerts_emitted = 0
         self.recoveries = 0
         self.revocations_with_pending_work = 0
+        self.shutting_down = False
+        self.shutdown_deadline: float | None = None
+        # Written by rebalance callbacks and reconciled on the polling thread.
+        self.recovery_partitions: set[TopicPartition] = set()
+        self.recovery_retry_at: dict[TopicPartition, float] = {}
 
     def on_partitions_revoked(self, revoked: Sequence[TopicPartition]) -> None:
         """Drop uncommitted local work before Kafka transfers ownership."""
@@ -197,6 +214,7 @@ class PartitionIsolatingBatchWorker(ConsumerRebalanceListener):
             if progress is not None:
                 if progress.records or progress.pending is not None:
                     self.revocations_with_pending_work += 1
+                    self.recovery_partitions.add(tp)
                 queued = len(progress.records)
                 stage = progress.pending.stage if progress.pending else "queued"
                 logger.warning(
@@ -206,18 +224,20 @@ class PartitionIsolatingBatchWorker(ConsumerRebalanceListener):
                 )
 
     def on_partitions_assigned(self, assigned: Sequence[TopicPartition]) -> None:
-        """Initialize state for new ownership and clear stale local pause flags."""
+        """Initialize ownership; polling thread reconciles any retained state."""
+        self.recovery_partitions.intersection_update(assigned)
+        self.recovery_retry_at = {tp: when for tp, when in self.recovery_retry_at.items()
+                                  if tp in self.recovery_partitions}
         for tp in assigned:
             self.partitions.setdefault(tp, PartitionProgress())
-        paused = set(self.consumer.paused())
-        to_resume = [tp for tp in assigned if tp in paused]
-        if to_resume:
-            self.consumer.resume(*to_resume)
-            logger.info("Resumed newly assigned partitions count=%d", len(to_resume))
 
     def enqueue_polled_records(self, records: dict[TopicPartition, Sequence[Any]]) -> None:
         """Append one poll result without doing blocking storage work."""
         for tp, messages in records.items():
+            if tp in self.recovery_partitions:
+                logger.info("Discarding fetched records pending recovery topic=%s partition=%s count=%d",
+                            tp.topic, tp.partition, len(messages))
+                continue
             progress = self.partitions.setdefault(tp, PartitionProgress())
             progress.records.extend(messages)
             progress.backpressure_paused = len(progress.records) >= self.batch_size
@@ -234,6 +254,7 @@ class PartitionIsolatingBatchWorker(ConsumerRebalanceListener):
         Polling between storage attempts services heartbeats and rebalance
         callbacks even when several partitions have queued batches.
         """
+        self._recover_assigned_partitions()
         keys = list(self.partitions)
         if not keys:
             return 0
@@ -245,6 +266,9 @@ class PartitionIsolatingBatchWorker(ConsumerRebalanceListener):
             tp = keys[index]
             progress = self.partitions.get(tp)
             if progress is None:
+                continue
+            if tp in self.recovery_partitions:
+                self._sync_pause(tp, progress)
                 continue
             if progress.pending is None and progress.records:
                 progress.pending = self._prepare_pending(progress)
@@ -295,6 +319,51 @@ class PartitionIsolatingBatchWorker(ConsumerRebalanceListener):
             if max_partitions is not None and processed >= max_partitions:
                 break
         return processed
+
+    def _recover_assigned_partitions(self) -> None:
+        """Reconcile discarded retained work on the consumer's polling thread.
+
+        A callback can run on kafka-python's network loop, so network-bound
+        committed()/position() calls must never run inside that callback.
+        """
+        # During shutdown partitions remain paused. Do not mark discarded
+        # broker work recovered when the worker will not fetch it again.
+        if self.shutting_down:
+            return
+        for tp in list(self.recovery_partitions):
+            progress = self.partitions.get(tp)
+            if progress is None or tp not in set(self.consumer.assignment()):
+                continue
+            self._sync_pause(tp, progress)
+            if self.clock() < self.recovery_retry_at.get(tp, 0.0):
+                continue
+            try:
+                committed = self.consumer.committed(tp, timeout_ms=legacy.COMMIT_TIMEOUT_MS)
+                if self.partitions.get(tp) is not progress or tp not in set(self.consumer.assignment()):
+                    continue
+                position = self.consumer.position(tp, timeout_ms=legacy.COMMIT_TIMEOUT_MS)
+                if self.partitions.get(tp) is not progress or tp not in set(self.consumer.assignment()):
+                    continue
+                if committed is None:
+                    policy = self.consumer.config.get("auto_offset_reset")
+                    if policy == "earliest":
+                        self.consumer.seek_to_beginning(tp)
+                    elif policy == "latest":
+                        self.consumer.seek_to_end(tp)
+                    else:
+                        raise RuntimeError(f"No committed offset and unsupported reset policy: {policy!r}")
+                    logger.info("M3_POSITION_RESET topic=%s partition=%s policy=%s", tp.topic, tp.partition, policy)
+                elif position is None or position != committed:
+                    self.consumer.seek(tp, committed)
+                    logger.info("M3_POSITION_RECOVERED topic=%s partition=%s position=%s committed=%s",
+                                tp.topic, tp.partition, position, committed)
+                self.recovery_partitions.discard(tp)
+                self.recovery_retry_at.pop(tp, None)
+                self._sync_pause(tp, progress)
+            except Exception:
+                self.recovery_retry_at[tp] = self.clock() + self.retry_base_seconds
+                logger.exception("M3_POSITION_RECOVERY_FAILED topic=%s partition=%s; will retry",
+                                 tp.topic, tp.partition)
 
     def _emit_alert_if_needed(self, tp: TopicPartition, progress: PartitionProgress, now: float) -> None:
         """Emit one actionable warning per unresolved failure incident."""
@@ -372,6 +441,12 @@ class PartitionIsolatingBatchWorker(ConsumerRebalanceListener):
         if pending is None:
             return
         while True:
+            if self.partitions.get(tp) is not progress or tp not in set(self.consumer.assignment()):
+                logger.warning("M3_PARTITION_OWNERSHIP_CHANGED topic=%s partition=%s stage=%s; leaving work for replay",
+                               tp.topic, tp.partition, pending.stage)
+                return
+            if self.shutdown_deadline is not None and self.clock() >= self.shutdown_deadline:
+                return
             if pending.stage == "write":
                 persist_points(self.write_api, pending.points)
                 pending.stage = "commit_valid"
@@ -434,7 +509,8 @@ class PartitionIsolatingBatchWorker(ConsumerRebalanceListener):
     def _sync_pause(self, tp: TopicPartition, progress: PartitionProgress) -> None:
         if tp not in set(self.consumer.assignment()):
             return
-        should_pause = progress.failure_paused or progress.backpressure_paused
+        should_pause = (self.shutting_down or tp in self.recovery_partitions or
+                        progress.failure_paused or progress.backpressure_paused)
         paused = set(self.consumer.paused())
         if should_pause and tp not in paused:
             self.consumer.pause(tp)
@@ -469,15 +545,67 @@ def create_batch_consumer() -> Any:
     raise RuntimeError("Batch Kafka connection failed after 30 attempts")
 
 
+def create_batch_dlq_producer() -> Any:
+    """Match the legacy DLQ contract with a bounded Kafka send wait."""
+    return legacy.KafkaProducer(
+        bootstrap_servers=legacy.KAFKA_BROKER,
+        value_serializer=lambda value: json.dumps(value).encode("utf-8"),
+        acks="all", retries=5, request_timeout_ms=10000,
+        max_in_flight_requests_per_connection=1, max_block_ms=DLQ_MAX_BLOCK_MS,
+    )
+
+
+
+def drain_worker(worker: PartitionIsolatingBatchWorker, deadline: float) -> bool:
+    """Drain owned queues while polling; synchronous calls may exceed the deadline."""
+    worker.shutting_down = True
+    worker.shutdown_deadline = deadline
+    assigned = set(worker.consumer.assignment())
+    paused = set(worker.consumer.paused())
+    if assigned - paused:
+        worker.consumer.pause(*(assigned - paused))
+    while worker.clock() < deadline:
+        records = worker.consumer.poll(timeout_ms=0, max_records=legacy.MAX_POLL_RECORDS)
+        worker.enqueue_polled_records(records)
+        if not worker.recovery_partitions and not any(p.records or p.pending for p in worker.partitions.values()):
+            return True
+        if worker.process_ready(max_partitions=1) == 0:
+            time.sleep(min(0.05, max(0, deadline - worker.clock())))
+    for tp, progress in worker.partitions.items():
+        if progress.records or progress.pending:
+            logger.warning(
+                "M3_SHUTDOWN_UNFINISHED topic=%s partition=%s offset=%s stage=%s",
+                tp.topic, tp.partition, progress.records[0].offset if progress.records else None,
+                progress.pending.stage if progress.pending else "queued",
+            )
+        elif tp in worker.recovery_partitions:
+            logger.warning("M3_SHUTDOWN_UNFINISHED topic=%s partition=%s offset=unresolved stage=position_recovery",
+                           tp.topic, tp.partition)
+    return not worker.recovery_partitions and not any(p.records or p.pending for p in worker.partitions.values())
+
 
 def run() -> None:
     require_safe_config()
-    consumer = create_batch_consumer()
+    stopping = False
+    shutdown_deadline = None
+    worker = None
+    def request_stop(signum: int, frame: Any) -> None:
+        nonlocal stopping, shutdown_deadline
+        stopping = True
+        if shutdown_deadline is None:
+            shutdown_deadline = time.monotonic() + SHUTDOWN_DRAIN_SECONDS
+            if worker is not None:
+                worker.shutdown_deadline = shutdown_deadline
+
+    previous_handlers = {sig: signal.signal(sig, request_stop) for sig in (signal.SIGTERM, signal.SIGINT)}
+    consumer = None
     client = None
     producer = None
+    drained = None
     try:
+        consumer = create_batch_consumer()
         client, write_api = legacy.create_influxdb_client()
-        producer = legacy.create_dead_letter_producer()
+        producer = create_batch_dlq_producer()
         worker = PartitionIsolatingBatchWorker(consumer, write_api, producer)
         consumer.subscribe(topics=[legacy.SENSOR_TOPIC], listener=worker)
         next_metrics_log = time.monotonic() + METRICS_LOG_SECONDS
@@ -485,18 +613,22 @@ def run() -> None:
             "Partition-isolating batch writer started batch_size=%s group=%s retry_base=%.2f retry_max=%.2f",
             BATCH_SIZE, legacy.CONSUMER_GROUP, RETRY_BASE_SECONDS, RETRY_MAX_SECONDS,
         )
-        while True:
+        while not stopping:
             records = consumer.poll(
                 timeout_ms=legacy.POLL_TIMEOUT_MS,
                 max_records=legacy.MAX_POLL_RECORDS,
             )
             worker.enqueue_polled_records(records)
+            if stopping:
+                break
             worker.process_ready(max_partitions=1)
             # Drain already-fetched batches fairly, polling between each
             # synchronous storage operation to service group heartbeats.
-            while True:
+            while not stopping:
                 more = consumer.poll(timeout_ms=0, max_records=legacy.MAX_POLL_RECORDS)
                 worker.enqueue_polled_records(more)
+                if stopping:
+                    break
                 processed = worker.process_ready(max_partitions=1)
                 if not more and processed == 0:
                     break
@@ -505,15 +637,59 @@ def run() -> None:
                 next_metrics_log = time.monotonic() + METRICS_LOG_SECONDS
             if worker.completed_records and worker.completed_records % 100 == 0:
                 logger.info("Completed source records=%d", worker.completed_records)
+        drained = drain_worker(worker, shutdown_deadline if shutdown_deadline is not None
+                               else time.monotonic() + SHUTDOWN_DRAIN_SECONDS)
     except KeyboardInterrupt:
         logger.info("Batch writer stopped by operator")
     finally:
-        if producer is not None:
-            producer.flush()
-            producer.close()
-        consumer.close()
-        if client is not None:
-            client.close()
+        original_exception = sys.exc_info()[1]
+        cleanup_deadline = time.monotonic() + CLEANUP_SECONDS
+        def remaining() -> float:
+            return max(0.0, cleanup_deadline - time.monotonic())
+
+        outcomes = {}
+        class KafkaCloseErrors(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                if record.levelno >= logging.ERROR:
+                    outcomes.setdefault("kafka_client_errors", []).append(record.getMessage())
+
+        kafka_errors = KafkaCloseErrors()
+        kafka_logger = logging.getLogger("kafka")
+        kafka_logger.addHandler(kafka_errors)
+        for name, action in (
+            ("producer flush", lambda: producer.flush(timeout=remaining()) if producer else None),
+            ("producer close", lambda: producer.close(timeout=remaining()) if producer else None),
+            ("consumer close", lambda: consumer.close(autocommit=False, timeout_ms=max(1, int(remaining() * 1000))) if consumer else None),
+            ("influx close", lambda: client.close() if client else None),
+        ):
+            try:
+                action()
+                outcomes[name] = "completed" if remaining() > 0 else "budget_exhausted"
+            except Exception:
+                outcomes[name] = "failed"
+                logger.exception("Shutdown cleanup failed: %s", name)
+        kafka_logger.removeHandler(kafka_errors)
+        # kafka-python logs and suppresses LeaveGroup failures. A normal close
+        # return cannot independently prove that the broker accepted departure.
+        outcomes["group_departure"] = (
+            "failed" if any("LeaveGroup" in msg for msg in outcomes.get("kafka_client_errors", []))
+            else "unverified"
+        )
+        for sig, handler in previous_handlers.items():
+            try:
+                signal.signal(sig, handler)
+            except Exception:
+                outcomes["signal_restore"] = "failed"
+                logger.exception("Failed to restore signal handler: %s", sig)
+        incomplete = (drained is False or bool(outcomes.get("kafka_client_errors")) or
+                      any(value in ("failed", "budget_exhausted") for value in outcomes.values()
+                          if isinstance(value, str)))
+        status = ("application_failed" if original_exception is not None else
+                  "incomplete" if incomplete else "close_completed_group_unverified")
+        logger.info("M3_SHUTDOWN_STATUS %s", json.dumps({"drained": drained,
+                    "cleanup": outcomes, "status": status}, sort_keys=True))
+        if incomplete and original_exception is None:
+            raise RuntimeError("Batch shutdown incomplete; inspect M3_SHUTDOWN_STATUS")
 
 
 if __name__ == "__main__":

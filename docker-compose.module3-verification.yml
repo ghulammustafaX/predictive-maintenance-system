@@ -41,17 +41,21 @@ services:
     entrypoint: ["/bin/bash", "-ec"]
     command:
       - |
-        kafka-topics --bootstrap-server kafka:9092 --create --topic m3-isolated-telemetry --partitions 1 --replication-factor 1
-        kafka-topics --bootstrap-server kafka:9092 --create --topic m3-isolated-dead-letter --partitions 1 --replication-factor 1
-        kafka-topics --bootstrap-server kafka:9092 --create --topic m3-batch-telemetry --partitions 1 --replication-factor 1
-        kafka-topics --bootstrap-server kafka:9092 --create --topic m3-batch-dead-letter --partitions 1 --replication-factor 1
-        kafka-topics --bootstrap-server kafka:9092 --create --topic m3-e2e-legacy-telemetry --partitions 1 --replication-factor 1
-        kafka-topics --bootstrap-server kafka:9092 --create --topic m3-e2e-batch-telemetry --partitions 1 --replication-factor 1
-        kafka-topics --bootstrap-server kafka:9092 --create --topic m3-inflight-telemetry --partitions 1 --replication-factor 1
-        kafka-topics --bootstrap-server kafka:9092 --create --topic m3-rebalance-telemetry --partitions 2 --replication-factor 1
-        kafka-topics --bootstrap-server kafka:9092 --create --topic m3-partition-fault-telemetry --partitions 2 --replication-factor 1
-        kafka-topics --bootstrap-server kafka:9092 --create --topic m3-load-legacy-telemetry --partitions 4 --replication-factor 1
-        kafka-topics --bootstrap-server kafka:9092 --create --topic m3-load-batch-telemetry --partitions 4 --replication-factor 1
+        for spec in m3-isolated-telemetry:1 m3-isolated-dead-letter:1 m3-batch-telemetry:1 m3-batch-dead-letter:1 m3-e2e-legacy-telemetry:1 m3-e2e-batch-telemetry:1 m3-inflight-telemetry:1 m3-rebalance-telemetry:2 m3-partition-fault-telemetry:2 m3-load-legacy-telemetry:4 m3-load-batch-telemetry:4; do
+          topic=$${spec%:*}
+          partitions=$${spec##*:}
+          description=$$(kafka-topics --bootstrap-server kafka:9092 --describe --if-exists --topic "$$topic")
+          if [ -z "$$description" ]; then
+            kafka-topics --bootstrap-server kafka:9092 --create --topic "$$topic" --partitions "$$partitions" --replication-factor 1
+            description=$$(kafka-topics --bootstrap-server kafka:9092 --describe --topic "$$topic")
+          fi
+          header=$$(printf '%s\n' "$$description" | head -n 1)
+          if ! printf '%s\n' "$$header" | grep -Eq "PartitionCount: $$partitions([[:space:]]|$$).*ReplicationFactor: 1([[:space:]]|$$).*Configs:[[:space:]]*$$"; then
+            printf 'Unexpected topic configuration for %s: %s\n' "$$topic" "$$header" >&2
+            exit 1
+          fi
+          printf 'Verified topic %s partitions=%s replication=1 explicit_configs=none\n' "$$topic" "$$partitions"
+        done
 
   influxdb:
     image: influxdb:2.7
@@ -165,8 +169,10 @@ services:
     command: ["python", "src/kafka_batch_consumer.py"]
     restart: "no"
     depends_on:
-      topic-init:
-        condition: service_completed_successfully
+      # Run topic-init separately when creating the verification environment.
+      # A worker restart must not rerun that one-shot initializer.
+      kafka:
+        condition: service_healthy
       influxdb:
         condition: service_healthy
     environment:
@@ -187,6 +193,9 @@ services:
     entrypoint: ["python", "/tests/module3_batch_probe.py"]
     volumes:
       - ./tests/module3_batch_probe.py:/tests/module3_batch_probe.py:ro
+      - ./tests/module3_evidence.py:/tests/module3_evidence.py:ro
+      - ./tests/module3_batch_aggregate.py:/tests/module3_batch_aggregate.py:ro
+      - ./tests/module3_load_evidence.py:/tests/module3_load_evidence.py:ro
     environment:
       MODULE3_BATCH_TEST_GUARD: m3-isolated-batch-only
       KAFKA_BROKER: kafka:9092
@@ -333,6 +342,9 @@ services:
     entrypoint: ["python", "/tests/module3_inflight_probe.py"]
     volumes:
       - ./tests/module3_inflight_probe.py:/tests/module3_inflight_probe.py:ro
+      - ./tests/module3_evidence.py:/tests/module3_evidence.py:ro
+      - ./tests/module3_inflight_aggregate.py:/tests/module3_inflight_aggregate.py:ro
+      - ./tests/module3_load_evidence.py:/tests/module3_load_evidence.py:ro
     environment:
       MODULE3_INFLIGHT_PROBE_GUARD: m3-isolated-inflight-probe-only
       KAFKA_BROKER: kafka:9092
@@ -437,6 +449,7 @@ services:
     entrypoint: ["python", "/tests/module3_partition_fault_probe.py"]
     volumes:
       - ./tests/module3_partition_fault_probe.py:/tests/module3_partition_fault_probe.py:ro
+      - ./tests/module3_evidence.py:/tests/module3_evidence.py:ro
       - m3-partition-fault-coordination:/coordination
     depends_on:
       topic-init:
@@ -528,6 +541,8 @@ services:
     entrypoint: ["python", "/tests/module3_sustained_load_probe.py"]
     volumes:
       - ./tests/module3_sustained_load_probe.py:/tests/module3_sustained_load_probe.py:ro
+      - ./tests/module3_evidence.py:/tests/module3_evidence.py:ro
+      - ./tests/module3_load_evidence.py:/tests/module3_load_evidence.py:ro
       - m3-load-results:/results
     depends_on:
       topic-init:

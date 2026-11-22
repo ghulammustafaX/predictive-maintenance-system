@@ -11,6 +11,7 @@ from pathlib import Path
 from influxdb_client import InfluxDBClient
 from kafka import KafkaConsumer, KafkaProducer
 from kafka.structs import TopicPartition
+from module3_evidence import evidence, observed_identity, published_identity, write_json
 
 EXPECTED = {
     "MODULE3_PARTITION_FAULT_PROBE_GUARD": "m3-isolated-partition-fault-probe-only",
@@ -71,6 +72,90 @@ def committed_offsets() -> dict[int, int | None]:
         observer.close()
 
 
+def partition_offsets():
+    observer = KafkaConsumer(bootstrap_servers=EXPECTED['KAFKA_BROKER'],
+                             group_id=EXPECTED['CONSUMER_GROUP'], enable_auto_commit=False,
+                             request_timeout_ms=10000)
+    try:
+        partitions = [TP0, TP1]
+        observer.assign(partitions)
+        beginnings = observer.beginning_offsets(partitions)
+        ends = observer.end_offsets(partitions)
+        return {tp.partition: {'beginning': beginnings[tp], 'end': ends[tp],
+                               'committed': observer.committed(tp)} for tp in partitions}
+    finally:
+        observer.close()
+
+
+def stage_evidence(stage, published, offsets, points, failure_count, released, initial_offsets):
+    if stage not in {'failure', 'recovery'}:
+        raise ValueError('Unknown isolation stage')
+    runs = {0: RUN_P0, 1: RUN_P1}
+    partitions = []
+    valid = failure_count >= 3 and (not released if stage == 'failure' else released)
+    for partition in (0, 1):
+        run = runs[partition]
+        source = published.get(partition, [])
+        if (len(source) != 3 or any(item['partition'] != partition or item['topic'] != EXPECTED['SENSOR_TOPIC']
+                                    or item['identity']['tags']['run_id'] != run for item in source)
+                or [item['offset'] for item in source] != [0, 1, 2]):
+            raise ValueError('Published source records do not match partition and run')
+        current = offsets[partition]
+        observed = [observed_identity(record.values) for record in points[partition]]
+        record = evidence('partition_isolation', run_id=run, topic=EXPECTED['SENSOR_TOPIC'],
+                          consumer_group=EXPECTED['CONSUMER_GROUP'], partition=partition,
+                          beginning_offset=current['beginning'], end_offset=current['end'],
+                          committed_offset=current['committed'],
+                          expected_point_identities=[item['identity'] for item in source],
+                          observed_point_identities=observed, worker_exit_status=None,
+                          scenario_status='incomplete', published_source_records=source,
+                          initial_committed_offset=initial_offsets[partition],
+                          injected_failure_count=failure_count if partition == 0 else 0,
+                          release_marker_present=released)
+        valid = valid and current['beginning'] == 0 and current['end'] == 3
+        if stage == 'failure' and partition == 0:
+            valid = valid and current['committed'] in (None, 0) and not observed
+        else:
+            valid = (valid and current['committed'] == 3 and not record['missing_point_identities']
+                     and not record['unexpected_point_identities'] and not record['duplicate_observed_identities'])
+        if stage == 'failure' and partition == 1:
+            valid = valid and initial_offsets[partition] in (None, 0)
+        partitions.append(record)
+    # The two existing fault-injection run IDs are distinct. The shared identifier
+    # describes the scenario; it is not substituted for either source run ID.
+    root = evidence('partition_isolation', run_id=None, topic=EXPECTED['SENSOR_TOPIC'],
+                    consumer_group=EXPECTED['CONSUMER_GROUP'], scenario_status='incomplete' if valid else 'failed',
+                    compose_project=os.environ.get('M3_PROJECT'), git_commit=os.environ.get('GITHUB_SHA'),
+                    scenario_run_id=f'{RUN_P0}|{RUN_P1}', stage=stage,
+                    failure_snapshot_observed=stage == 'failure', partitions=partitions,
+                    worker_status=None, worker_exit_status_observation=None,
+                    http_write_attempt_count=None)
+    return root, valid
+
+
+def capture_evidence(stage, published, client, initial_offsets):
+    output = os.environ.get('M3_EVIDENCE_DIR')
+    if not output:
+        return
+    if stage == 'recovery':
+        failure_path = Path(output) / 'partition_isolation_failure.json'
+        if not failure_path.is_file():
+            raise ValueError('Missing failure-stage snapshot; recovery evidence is incomplete')
+        failure = json.loads(failure_path.read_text(encoding='utf-8'))
+        if (failure.get('stage') != 'failure' or failure.get('scenario_status') == 'failed'
+                or failure.get('scenario_run_id') != f'{RUN_P0}|{RUN_P1}'
+                or failure.get('compose_project') != os.environ.get('M3_PROJECT')
+                or failure.get('git_commit') != os.environ.get('GITHUB_SHA')):
+            raise ValueError('Failure-stage snapshot does not match this scenario')
+    count = int(FAILURE_COUNT.read_text(encoding='utf-8'))
+    record, valid = stage_evidence(stage, published, partition_offsets(),
+                                   {0: points_for(client, RUN_P0), 1: points_for(client, RUN_P1)},
+                                   count, RELEASE_MARKER.exists(), initial_offsets)
+    write_json(Path(output) / f'partition_isolation_{stage}.json', record)
+    if not valid:
+        raise AssertionError(f'Partition isolation {stage} evidence did not reconcile')
+
+
 def points_for(client: InfluxDBClient, run_id: str) -> list:
     query = f'''from(bucket: "{EXPECTED["INFLUXDB_BUCKET"]}")
   |> range(start: -1h)
@@ -117,9 +202,15 @@ def verify() -> None:
         timeout=10000,
     )
     try:
+        initial_offsets = committed_offsets()
+        published = {0: [], 1: []}
         for cycle in range(1, 4):
-            producer.send(EXPECTED["SENSOR_TOPIC"], value=event(0, cycle), key=f"{RUN_P0}-{cycle}".encode(), partition=0).get(timeout=20)
-            producer.send(EXPECTED["SENSOR_TOPIC"], value=event(1, cycle), key=f"{RUN_P1}-{cycle}".encode(), partition=1).get(timeout=20)
+            for partition, run in ((0, RUN_P0), (1, RUN_P1)):
+                payload = event(partition, cycle)
+                metadata = producer.send(EXPECTED['SENSOR_TOPIC'], value=payload, key=f'{run}-{cycle}'.encode(), partition=partition).get(timeout=20)
+                published[partition].append({'topic': metadata.topic, 'partition': metadata.partition,
+                                             'offset': metadata.offset, 'event_id': payload['event_id'],
+                                             'identity': published_identity(payload)})
         producer.flush()
 
         wait_for(
@@ -149,6 +240,7 @@ def verify() -> None:
         assert int(FAILURE_COUNT.read_text(encoding="utf-8")) >= 3
         print("PASS: repeated partition-local failures did not block healthy partition progress", flush=True)
 
+        capture_evidence('failure', published, client, initial_offsets)
         RELEASE_MARKER.write_text("release\n", encoding="utf-8")
 
         def both_partitions_recovered():
@@ -164,6 +256,7 @@ def verify() -> None:
         ids1 = {record.values["cycle"] for record in p1}
         assert ids0 == {"1", "2", "3"}, ids0
         assert ids1 == {"1", "2", "3"}, ids1
+        capture_evidence('recovery', published, client, initial_offsets)
         print("PASS: failed partition 0 resumed and committed offset 3 after output recovery", flush=True)
         print("PASS: both partitions contain exactly three deterministic points with no skipped cycles", flush=True)
         print("MODULE 03 PARTITION FAILURE ISOLATION: PASS", flush=True)

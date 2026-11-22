@@ -130,7 +130,12 @@ def test_publisher_paces_equal_bounded_bursts(monkeypatch, tmp_path):
         def __init__(self, **kwargs): pass
         def send(self, topic, **kwargs):
             sent.append((topic, kwargs["partition"], kwargs["value"]["sequence"]))
-            return SimpleNamespace(get=lambda timeout: acknowledgments.append(timeout))
+            offset = sum(1 for previous in sent[:-1]
+                         if previous[0] == topic and previous[1] == kwargs["partition"])
+            def acknowledge(timeout):
+                acknowledgments.append(timeout)
+                return SimpleNamespace(topic=topic, partition=kwargs["partition"], offset=offset)
+            return SimpleNamespace(get=acknowledge)
         def flush(self, **kwargs): pass
         def close(self, **kwargs): pass
     module.KafkaProducer = Producer
@@ -143,3 +148,9 @@ def test_publisher_paces_equal_bounded_bursts(monkeypatch, tmp_path):
         assert len(records) == 100
         assert [seq for _, seq in records] == list(range(1, 101))
         assert [sum(partition == p for partition, _ in records) for p in range(4)] == [25] * 4
+    for mode, topic in module.TOPICS.items():
+        acknowledged = module.read_jsonl(tmp_path / f'sustained_load_{mode}_published.jsonl', 100)
+        assert [row['topic'] for row in acknowledged] == [topic] * 100
+        assert [row['identity']['tags']['run_id'] for row in acknowledged] == [module.RUN_IDS[mode]] * 100
+        assert [int(row['identity']['tags']['cycle']) for row in acknowledged] == list(range(1, 101))
+        assert all(isinstance(row['identity']['timestamp_ns'], int) for row in acknowledged)
