@@ -434,6 +434,7 @@ simulator/read_data.py
 build_*.py
 compare_*.py
 ml/build_*.py
+!ml/build_combined_dataset.py
 ml/compare_*.py
 
 # No duplicate env examples — only root .env.example is kept
