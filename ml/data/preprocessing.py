@@ -42,6 +42,20 @@ from ml.config import (
 FEATURE_COLUMNS = SETTING_COLUMNS + SENSOR_COLUMNS
 
 
+def _identity_columns(df: pd.DataFrame) -> list[str]:
+    """Use available identities; a run without a dataset is single-dataset input."""
+    columns = [c for c in ("unit_id", "dataset_id", "run_id") if c in df.columns]
+    if "unit_id" not in columns:
+        raise ValueError("unit_id is required")
+    for column in columns:
+        if df[column].isna().any() or df[column].map(
+            lambda value: (isinstance(value, str) and not value.strip())
+            or (isinstance(value, (int, float, np.number)) and not np.isfinite(value))
+        ).any():
+            raise ValueError(f"{column} contains missing or invalid identity values")
+    return columns
+
+
 # ---------------------------------------------------------------------------
 # Sub-module: Missing Value Handler
 # ---------------------------------------------------------------------------
@@ -53,10 +67,15 @@ def handle_missing_values(
     """Forward-fill missing sensor/setting readings per engine unit, then
     back-fill any leading gaps by default. Streaming callers set
     ``backfill=False`` so leading gaps use persisted training medians."""
-    df = df.sort_values(["unit_id", "time_cycles"]).copy()
-    filled = df.groupby("unit_id")[FEATURE_COLUMNS].ffill()
+    identities = _identity_columns(df)
+    df = df.sort_values(identities + ["time_cycles"]).copy()
+    try:
+        df[FEATURE_COLUMNS] = df[FEATURE_COLUMNS].apply(pd.to_numeric, errors="raise").replace([np.inf, -np.inf], np.nan)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("sensor and setting values must be numeric") from exc
+    filled = df.groupby(identities, sort=False)[FEATURE_COLUMNS].ffill()
     if backfill:
-        filled = filled.groupby(df["unit_id"].to_numpy()).bfill()
+        filled = filled.groupby([df[c] for c in identities], sort=False).bfill()
     df[FEATURE_COLUMNS] = filled
     remaining_na = df[FEATURE_COLUMNS].isna().sum().sum()
     if remaining_na:
@@ -66,6 +85,8 @@ def handle_missing_values(
             else df[FEATURE_COLUMNS].median().to_dict()
         )
         df[FEATURE_COLUMNS] = df[FEATURE_COLUMNS].fillna(medians)
+    if not np.isfinite(df[FEATURE_COLUMNS].to_numpy(dtype=float)).all():
+        raise ValueError("missing sensor or setting value has no finite replacement")
     return df
 
 
@@ -199,6 +220,7 @@ def generate_windows(
     window_size: int = WINDOW_SIZE,
     feature_columns: list[str] | None = None,
     last_window_only: bool = False,
+    validate_cycles: bool = True,
 ) -> WindowedDataset:
     """Convert per-cycle rows into fixed-length sliding windows for LSTM
     consumption. `last_window_only=True` is used for TEST data, matching
@@ -208,12 +230,21 @@ def generate_windows(
     Engines with fewer than `window_size` cycles are left-padded by
     repeating their first row, so short test sequences still produce a
     usable window instead of being silently dropped.
+
+    By default reject sequences containing duplicate, missing, or non-finite
+    cycles. Set ``validate_cycles=False`` for legacy eligibility behavior.
     """
     feature_columns = feature_columns or FEATURE_COLUMNS
     X_chunks, y_chunks, unit_chunks = [], [], []
 
-    for unit_id, group in df.groupby("unit_id"):
+    identities = _identity_columns(df)
+    for identity, group in df.groupby(identities, sort=True):
+        unit_id = identity[0] if isinstance(identity, tuple) else identity
         group = group.sort_values("time_cycles")
+        if validate_cycles:
+            cycles = pd.to_numeric(group["time_cycles"], errors="coerce").to_numpy(dtype=float)
+            if not np.isfinite(cycles).all() or not np.equal(np.diff(cycles), 1).all():
+                raise ValueError(f"Unit {unit_id}: cycles must be finite and consecutive without duplicates")
         values = group[feature_columns].to_numpy(dtype=np.float32)
         ruls = group["rul"].to_numpy(dtype=np.float32)
 
@@ -258,8 +289,12 @@ def split_by_unit(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Split by engine UNIT ID (not by row) so no engine's cycles appear
     in both train and validation — prevents temporal leakage."""
+    if not np.isfinite(val_fraction) or not 0 < val_fraction < 1:
+        raise ValueError("val_fraction must be finite and strictly between 0 and 1")
     rng = np.random.default_rng(seed)
     unit_ids = df["unit_id"].unique()
+    if len(unit_ids) < 2:
+        raise ValueError("at least two engine units are required for a train/validation split")
     rng.shuffle(unit_ids)
 
     n_val = max(1, int(len(unit_ids) * val_fraction))

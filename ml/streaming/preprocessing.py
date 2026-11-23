@@ -150,7 +150,11 @@ class StreamingPreprocessor:
         medians = {column: values["median"] for column, values in stats.items()}
         for column in FEATURE_COLUMNS:
             value = row[column]
-            if value is None or pd.isna(value):
+            try:
+                invalid = value is None or not np.isfinite(float(value))
+            except (TypeError, ValueError):
+                raise ValueError(f"Invalid numeric value for {column}") from None
+            if invalid:
                 row[column] = state.last_values.get(column, medians[column])
         frame = handle_missing_values(
             pd.DataFrame([{"unit_id": unit_id, "time_cycles": cycle, **row}]),

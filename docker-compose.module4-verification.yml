@@ -1,0 +1,64 @@
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: "2181"
+      ZOOKEEPER_TICK_TIME: "2000"
+    healthcheck:
+      test: ["CMD-SHELL", "echo srvr | nc -w 2 127.0.0.1 2181 | grep -Eq '^Mode: (standalone|leader|follower)'"]
+      interval: 5s
+      timeout: 4s
+      retries: 24
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: "1"
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server kafka:9092 --list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 24
+  topic-init:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-ec"]
+    command:
+      - |
+        for topic in m4-test-input m4-test-output; do
+          kafka-topics --bootstrap-server kafka:9092 --create --topic "$$topic" --partitions 1 --replication-factor 1
+        done
+  worker:
+    build:
+      context: .
+      dockerfile: tests/module04.Dockerfile
+    command: ["python", "/app/tests/module04_kafka_worker.py"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      PREPROCESSING_INPUT_TOPIC: m4-test-input
+      PREPROCESSING_OUTPUT_TOPIC: m4-test-output
+      PREPROCESSING_CONSUMER_GROUP: ${M4_GROUP:?M4_GROUP required}
+      PREPROCESSING_CHECKPOINT_PATH: /checkpoint/state.sqlite
+      PREPROCESSING_RETRY_SECONDS: "1"
+    volumes:
+      - checkpoint:/checkpoint
+  probe:
+    build:
+      context: .
+      dockerfile: tests/module04.Dockerfile
+    command: ["python", "/app/tests/module04_kafka_probe.py"]
+    environment:
+      M4_GROUP: ${M4_GROUP:?M4_GROUP required}
+    volumes:
+      - checkpoint:/checkpoint:ro
+volumes:
+  checkpoint: {}
