@@ -101,10 +101,20 @@ def publish_partition(partition: int, run_id: str, unit_id: int) -> None:
                 "operational_setting_3": 100.0,
                 "sensor_1": float(cycle),
             }
-            futures.append(producer.send(TOPIC, partition=partition, value=payload))
-        for future in futures:
-            future.get(timeout=20)
+            futures.append((producer.send(TOPIC, partition=partition, value=payload), payload))
+        published = []
+        for future, payload in futures:
+            metadata = future.get(timeout=20)
+            if os.environ.get('M3_POSITION_CAPTURE') == 'isolated-position-evidence-only':
+                from module3_evidence import published_identity
+                published.append({'topic': metadata.topic, 'partition': metadata.partition,
+                                  'offset': metadata.offset, 'event_id': payload['event_id'],
+                                  'identity': published_identity(payload)})
         producer.flush(timeout=20)
+        if os.environ.get('M3_POSITION_CAPTURE') == 'isolated-position-evidence-only':
+            from module3_evidence import write_json
+            write_json(COORDINATION / f'published-p{partition}.json',
+                       {'run_id': run_id, 'records': published})
         print(f"M3_REBALANCE_PUBLISHED partition={partition} records={COUNT}", flush=True)
     finally:
         producer.close()
@@ -128,6 +138,9 @@ def publish_p0(client) -> None:
     assert ends == {0: 0, 1: 0}, f"Expected empty two-partition topic, got {ends}"
     assert committed == {0: None, 1: None}, f"Unexpected pre-existing group offsets: {committed}"
     assert influx_count(client, RUN_P0) == 0 and influx_count(client, RUN_P1) == 0
+    if os.environ.get('M3_POSITION_CAPTURE') == 'isolated-position-evidence-only':
+        from module3_evidence import write_json
+        write_json(COORDINATION / 'initial-offsets.json', {'committed': committed, 'end': ends})
     publish_partition(0, RUN_P0, 903)
 
 

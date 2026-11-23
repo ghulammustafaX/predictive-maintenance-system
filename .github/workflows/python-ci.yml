@@ -52,6 +52,7 @@ jobs:
           skipped = sum(int(suite.attrib.get("skipped", "0")) for suite in suites)
           assert skipped == 0, f"Offline regression unexpectedly skipped {skipped} tests"
           PY
+          python -m pytest tests/module3_evidence_checks.py tests/module3_batch_evidence_checks.py tests/module3_inflight_evidence_checks.py tests/module3_partition_evidence_checks.py tests/module3_reassignment_evidence_checks.py tests/module3_load_evidence_checks.py tests/module3_acceptance_gate_checks.py tests/module3_runner_evidence_checks.py tests/module3_shutdown_evidence_checks.py -q -rs
       - name: Publish regression test report
         if: always()
         uses: actions/upload-artifact@v4
@@ -151,35 +152,54 @@ jobs:
     name: Isolated Kafka and InfluxDB persistence
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      M3_PROJECT: pms-m3-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
+      - name: Check hosted runner capacity
+        id: m3_preflight
+        run: |
+          set -euo pipefail
+          mkdir -p m3-evidence
+          test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+          available_kib=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
+          disk_kib=$(df -Pk "$PWD" | awk 'NR == 2 {print $4}')
+          cpus=$(nproc)
+          printf '{"available_memory_kib":%s,"available_disk_kib":%s,"cpus":%s}\n' "$available_kib" "$disk_kib" "$cpus" | tee m3-evidence/preflight.json
+          test "$available_kib" -ge 4194304
+          test "$disk_kib" -ge 10485760
+          test "$cpus" -ge 2
       - name: Start isolated Module 03 stack
         run: |
-          docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml up -d --wait --wait-timeout 240 --build \
+          docker compose -p "$M3_PROJECT" -f docker-compose.module3-verification.yml up -d --wait --wait-timeout 240 --build \
             zookeeper kafka topic-init influxdb consumer
       - name: Exercise real Kafka consumer and InfluxDB storage
         run: |
-          docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml run --rm --no-deps verifier
+          docker compose -p "$M3_PROJECT" -f docker-compose.module3-verification.yml run --rm --no-deps verifier
       - name: Verify bounded Flux queries against isolated real InfluxDB
         run: |
-          docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml run --rm --no-deps query-verifier
+          docker compose -p "$M3_PROJECT" -f docker-compose.module3-verification.yml run --rm --no-deps query-verifier
       - name: Verify isolated InfluxDB bucket retention provisioning
         run: |
-          docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml run --rm --no-deps policy-verifier
+          docker compose -p "$M3_PROJECT" -f docker-compose.module3-verification.yml run --rm --no-deps policy-verifier
       - name: Verify isolated automated downsampling task
         run: |
-          docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml run --rm --no-deps downsample-verifier
+          docker compose -p "$M3_PROJECT" -f docker-compose.module3-verification.yml run --rm --no-deps downsample-verifier
       - name: Verify opt-in batch worker in isolated Kafka and InfluxDB
         run: |
-          docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml up -d --no-deps --build batch-worker
-          docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml run --rm --no-deps batch-verifier
+          docker compose -p "$M3_PROJECT" -f docker-compose.module3-verification.yml up -d --no-deps --build batch-worker
+          docker compose -p "$M3_PROJECT" -f docker-compose.module3-verification.yml run --rm --no-deps \
+            -v "$PWD/m3-evidence:/evidence" -e M3_EVIDENCE_DIR=/evidence \
+            -e M3_PROJECT="$M3_PROJECT" -e GITHUB_SHA="$GITHUB_SHA" \
+            -e M3_EVIDENCE_UID="$(id -u)" -e M3_EVIDENCE_GID="$(id -g)" batch-verifier
+          python tests/module3_runner_evidence.py check m3-evidence/batch_persistence.json
       - name: Measure single versus batched InfluxDB writes on isolated instance
         run: |
-          docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml run --rm --no-deps write-benchmark
+          docker compose -p "$M3_PROJECT" -f docker-compose.module3-verification.yml run --rm --no-deps write-benchmark
       - name: Run isolated legacy vs batch E2E comparison and SIGKILL restart
         run: |
           set -euo pipefail
-          compose=(docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml)
+          compose=(docker compose -p "$M3_PROJECT" -f docker-compose.module3-verification.yml)
           "${compose[@]}" up -d --no-deps --build e2e-legacy-worker e2e-batch-worker
           "${compose[@]}" run --rm --no-deps e2e-verifier benchmark
           "${compose[@]}" kill -s SIGKILL e2e-batch-worker
@@ -189,20 +209,30 @@ jobs:
       - name: Verify crash after Influx write acknowledgment before Kafka commit
         run: |
           set -euo pipefail
-          compose=(docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml)
+          compose=(docker compose -p "$M3_PROJECT" -f docker-compose.module3-verification.yml)
+          probe=("${compose[@]}" run --rm --no-deps -v "$PWD/m3-evidence:/evidence" -e M3_EVIDENCE_DIR=/evidence -e M3_PROJECT="$M3_PROJECT" -e GITHUB_SHA="$GITHUB_SHA" -e M3_EVIDENCE_UID="$(id -u)" -e M3_EVIDENCE_GID="$(id -g)")
           "${compose[@]}" up -d --no-deps --build inflight-kill-worker
-          "${compose[@]}" run --rm --no-deps inflight-verifier publish
-          "${compose[@]}" run --rm --no-deps inflight-verifier before-restart
+          "${probe[@]}" inflight-verifier publish
+          "${probe[@]}" inflight-verifier before-restart
           "${compose[@]}" logs --no-color inflight-kill-worker | grep -F 'M3_FAULT_AFTER_INFLUX_ACK_BEFORE_KAFKA_COMMIT'
           container_id=$("${compose[@]}" ps -a -q inflight-kill-worker)
           test -n "$container_id"
-          test "$(docker inspect "$container_id" --format '{{.State.ExitCode}}')" = 137
+          crash_exit=$(docker inspect "$container_id" --format '{{.State.ExitCode}}')
+          test "$crash_exit" = 137
+          "${probe[@]}" -e M3_WORKER_EXIT_STATUS="$crash_exit" -e M3_ACK_MARKER_VERIFIED=true inflight-verifier record-crash
+          python tests/module3_runner_evidence.py check m3-evidence/crash_after_ack.json
           "${compose[@]}" up -d --no-deps --build inflight-recovery-worker
-          "${compose[@]}" run --rm --no-deps inflight-verifier after-recovery
+          "${probe[@]}" inflight-verifier after-recovery
+          "${compose[@]}" stop --timeout 35 inflight-recovery-worker
+          recovery_id=$("${compose[@]}" ps -a -q inflight-recovery-worker)
+          test -n "$recovery_id"
+          recovery_exit=$(docker inspect "$recovery_id" --format '{{.State.ExitCode}}')
+          "${probe[@]}" -e M3_WORKER_EXIT_STATUS="$recovery_exit" inflight-verifier record-recovery
+          python tests/module3_runner_evidence.py check m3-evidence/restart_replay.json
       - name: Verify two-partition rebalance and durable-prefix recovery
         run: |
           set -euo pipefail
-          compose=(docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml)
+          compose=(docker compose -p "$M3_PROJECT" -f docker-compose.module3-verification.yml)
           "${compose[@]}" up -d --no-deps --build rebalance-fault-worker
           "${compose[@]}" run --rm --no-deps rebalance-verifier publish-p0
           "${compose[@]}" run --rm --no-deps rebalance-verifier await-write-ack
@@ -218,34 +248,138 @@ jobs:
       - name: Verify partition-specific retry isolation with real Kafka and InfluxDB
         run: |
           set -euo pipefail
-          compose=(docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml)
+          compose=(docker compose -p "$M3_PROJECT" -f docker-compose.module3-verification.yml)
           "${compose[@]}" run --rm --no-deps partition-fault-verifier prepare
           "${compose[@]}" up -d --no-deps --build partition-fault-worker
-          "${compose[@]}" run --rm --no-deps partition-fault-verifier verify
+          "${compose[@]}" run --rm --no-deps -v "$PWD/m3-evidence:/evidence" \
+            -e M3_EVIDENCE_DIR=/evidence -e M3_PROJECT="$M3_PROJECT" \
+            -e GITHUB_SHA="$GITHUB_SHA" -e M3_EVIDENCE_UID="$(id -u)" \
+            -e M3_EVIDENCE_GID="$(id -g)" partition-fault-verifier verify
           "${compose[@]}" logs --no-color partition-fault-worker | grep -F 'M3_PARTITION_FAULT_P0_WRITE_INJECTED'
           "${compose[@]}" logs --no-color partition-fault-worker | grep -F 'M3_PARTITION_ALERT topic=m3-partition-fault-telemetry partition=0'
           "${compose[@]}" logs --no-color partition-fault-worker | grep -F 'M3_PARTITION_RECOVERED topic=m3-partition-fault-telemetry partition=0'
           container_id=$("${compose[@]}" ps -q partition-fault-worker)
           test -n "$container_id"
           test "$(docker inspect "$container_id" --format '{{.State.Running}}')" = true
+          python - <<'PY'
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, 'tests')
+          from module3_runner_evidence import atomic_update
+          for stage in ('failure', 'recovery'):
+              path = Path('m3-evidence') / f'partition_isolation_{stage}.json'
+              def update(record):
+                  record['worker_status_after_recovery'] = 'running'
+                  if stage == 'recovery':
+                      record['worker_status'] = 'running'
+                      record['worker_status_observation'] = 'after recovery'
+              atomic_update(path, update)
+          PY
+      - name: Verify same-owner and different-owner position recovery
+        run: |
+          set -euo pipefail
+          bash tests/module3_hosted_position.sh 2>&1 | tee m3-evidence/position-recovery.log
+      - name: Verify graceful shutdown and exhausted-drain replay
+        run: |
+          set -euo pipefail
+          bash tests/module3_hosted_shutdown.sh 2>&1 | tee m3-evidence/shutdown-orchestration.log
       - name: Run sustained-load comparison for legacy and batch consumers
         run: |
           set -euo pipefail
-          compose=(docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml)
+          compose=(docker compose -p "$M3_PROJECT" -f docker-compose.module3-verification.yml)
           "${compose[@]}" up -d --no-deps --build load-legacy-worker load-batch-worker
           "${compose[@]}" run --rm --no-deps load-verifier publish
           "${compose[@]}" wait load-legacy-worker load-batch-worker
+          declare -A load_exit
           for service in load-legacy-worker load-batch-worker; do
             container_id=$("${compose[@]}" ps -a -q "$service")
             test -n "$container_id"
-            test "$(docker inspect "$container_id" --format '{{.State.ExitCode}}')" = 0
+            load_exit[$service]=$(docker inspect "$container_id" --format '{{.State.ExitCode}}')
+            test "${load_exit[$service]}" = 0
           done
-          "${compose[@]}" run --rm --no-deps load-verifier verify
+          "${compose[@]}" run --rm --no-deps -e M3_PROJECT="$M3_PROJECT" -e GITHUB_SHA="$GITHUB_SHA" \
+            -e M3_LOAD_LEGACY_EXIT="${load_exit[load-legacy-worker]}" \
+            -e M3_LOAD_BATCH_EXIT="${load_exit[load-batch-worker]}" load-verifier verify
       - name: Save isolated stack logs on failure
         if: failure()
         run: |
-          docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml ps -a
-          docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml logs --no-color --tail=120
-      - name: Tear down only isolated Module 03 services
+          docker compose -p "$M3_PROJECT" -f docker-compose.module3-verification.yml ps -a
+          docker compose -p "$M3_PROJECT" -f docker-compose.module3-verification.yml logs --no-color --tail=120
+      - name: Capture isolated Module 03 evidence
+        if: always() && steps.m3_preflight.outcome == 'success'
+        run: |
+          set +e
+          compose=(docker compose -p "$M3_PROJECT" -f docker-compose.module3-verification.yml)
+          mkdir -p m3-evidence
+          "${compose[@]}" ps -a --format json > m3-evidence/containers.json
+          "${compose[@]}" logs --no-color > m3-evidence/compose.log 2>&1
+          "${compose[@]}" exec -T kafka kafka-topics --bootstrap-server kafka:9092 --describe > m3-evidence/topics.txt 2>&1
+          "${compose[@]}" exec -T kafka kafka-consumer-groups --bootstrap-server kafka:9092 --describe --all-groups > m3-evidence/consumer-groups.txt 2>&1
+          for mode in same transfer; do
+            for role in fault peer; do
+              docker logs "${M3_PROJECT}-${mode}-${role}" > "m3-evidence/${mode}-${role}.log" 2>&1
+            done
+          done
+          for scenario in graceful exhausted; do
+            for role in worker recovery; do
+              docker logs "${M3_PROJECT}-${scenario}-${role}" > "m3-evidence/${scenario}-${role}-captured.log" 2>&1
+            done
+          done
+          load_id=$("${compose[@]}" ps -a -q load-batch-worker)
+          if [ -n "$load_id" ]; then docker cp "$load_id:/results/." m3-evidence/; fi
+          exit 0
+      - name: Build fail-closed acceptance summary
         if: always()
-        run: docker compose -p pms-ci-m3 -f docker-compose.module3-verification.yml down --remove-orphans
+        env:
+          M3_JOB_STATUS: ${{ job.status }}
+        run: |
+          python tests/module3_partition_aggregate.py
+          python tests/module3_evidence.py
+      - name: Publish isolated Module 03 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pms-m3-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: m3-evidence/
+          if-no-files-found: warn
+      - name: Tear down only isolated Module 03 services
+        if: always() && steps.m3_preflight.outcome == 'success'
+        run: |
+          set -euo pipefail
+          mapfile -t containers < <(docker ps -aq --filter "label=pms.hosted.acceptance=$M3_PROJECT")
+          if ((${#containers[@]})); then docker rm -f "${containers[@]}"; fi
+          mapfile -t volumes < <(docker volume ls -q --filter "label=pms.hosted.acceptance=$M3_PROJECT")
+          if ((${#volumes[@]})); then docker volume rm "${volumes[@]}"; fi
+          docker compose -p "$M3_PROJECT" -f docker-compose.module3-verification.yml down --volumes --remove-orphans
+
+  final-acceptance:
+    name: Final Module 03 acceptance gate
+    needs: [regression, broker-integration, influxdb-integration]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      M3_PROJECT: pms-m3-${{ github.run_id }}-${{ github.run_attempt }}
+      M3_JOB_REGRESSION: ${{ needs.regression.result }}
+      M3_JOB_BROKER_INTEGRATION: ${{ needs.broker-integration.result }}
+      M3_JOB_INFLUXDB_INTEGRATION: ${{ needs.influxdb-integration.result }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download scenario evidence if available
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: pms-m3-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: m3-downloaded
+      - name: Build final acceptance summary
+        run: python tests/module3_acceptance_gate.py
+      - name: Publish final acceptance summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pms-m3-final-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: m3-final-evidence/
+          if-no-files-found: warn
+      - name: Require passing final acceptance
+        run: |
+          python -c 'import json; p="m3-final-evidence/module3-acceptance-summary.json"; s=json.load(open(p)); assert s["overall_acceptance_status"] == "passed", s["overall_acceptance_status"]'

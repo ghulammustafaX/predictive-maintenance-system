@@ -11,6 +11,8 @@ from typing import Any
 
 from influxdb_client import InfluxDBClient
 from kafka import KafkaProducer
+from module3_evidence import evidence, observed_identity, published_identity, write_json
+from module3_load_evidence import IdentityMismatch, aggregate, read_jsonl, reconcile, write_jsonl
 
 EXPECTED = {
     "MODULE3_LOAD_PROBE_GUARD": "m3-isolated-sustained-load-probe-only",
@@ -73,22 +75,27 @@ def publish() -> None:
     )
     started = time.monotonic()
     pending = []
+    acknowledged = {'legacy': [], 'batch': []}
     try:
         for sequence in range(1, RECORDS_PER_MODE + 1):
             timestamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
             for mode, topic in TOPICS.items():
-                pending.append(producer.send(
+                item = payload(mode, sequence, timestamp)
+                pending.append((producer.send(
                     topic,
                     key=f"engine-1-{sequence}",
-                    value=payload(mode, sequence, timestamp),
+                    value=item,
                     partition=(sequence - 1) % PARTITIONS,
-                ))
+                ), mode, item))
             # Pace bounded bursts at the same long-run rate. Evenly spaced
             # individual sends can let a fast consumer flush single points,
             # failing to exercise batching despite the intended workload.
             if sequence % BURST_RECORDS == 0 or sequence == RECORDS_PER_MODE:
-                for delivery in pending:
-                    delivery.get(timeout=15)
+                for delivery, mode, item in pending:
+                    metadata = delivery.get(timeout=15)
+                    acknowledged[mode].append({'topic': metadata.topic, 'partition': metadata.partition,
+                                               'offset': metadata.offset, 'event_id': item['event_id'],
+                                               'identity': published_identity(item)})
                 pending.clear()
                 target = started + sequence / TARGET_RATE
                 remaining = target - time.monotonic()
@@ -101,6 +108,10 @@ def publish() -> None:
         producer.close(timeout=30)
 
     elapsed = time.monotonic() - started
+    for mode in ('legacy', 'batch'):
+        path = RESULTS_DIR / f'sustained_load_{mode}_published.jsonl'
+        write_jsonl(path, acknowledged[mode])
+        read_jsonl(path, RECORDS_PER_MODE)
     summary = {
         "records_per_mode": RECORDS_PER_MODE,
         "target_rate_per_topic": TARGET_RATE,
@@ -133,6 +144,28 @@ def persisted_count(client: InfluxDBClient, run_id: str) -> int:
         for record in table.records
     ]
     return int(records[0].get_value()) if records else 0
+
+
+def persisted_cycles(client: InfluxDBClient, run_id: str) -> list[int]:
+    query = f'''from(bucket: "{EXPECTED["INFLUXDB_BUCKET"]}")
+  |> range(start: -1d)
+  |> filter(fn: (r) => r._measurement == "sensor_telemetry"
+      and r._field == "time_cycles" and r.run_id == "{run_id}")
+'''
+    return sorted(int(record.get_value())
+                  for table in client.query_api().query(query, org=EXPECTED['INFLUXDB_ORG'])
+                  for record in table.records)
+
+
+def persisted_identities(client: InfluxDBClient, run_id: str) -> list[dict]:
+    query = f'''from(bucket: "{EXPECTED["INFLUXDB_BUCKET"]}")
+  |> range(start: -1d)
+  |> filter(fn: (r) => r._measurement == "sensor_telemetry"
+      and r._field == "time_cycles" and r.run_id == "{run_id}")
+'''
+    return [observed_identity(record.values)
+            for table in client.query_api().query(query, org=EXPECTED['INFLUXDB_ORG'])
+            for record in table.records]
 
 
 def verify() -> None:
@@ -177,11 +210,56 @@ def verify() -> None:
     ) as client:
         for mode in ("legacy", "batch"):
             count = persisted_count(client, RUN_IDS[mode])
-            if count != RECORDS_PER_MODE:
+            observed = persisted_cycles(client, RUN_IDS[mode])
+            expected = list(range(1, RECORDS_PER_MODE + 1))
+            published_path = RESULTS_DIR / f'sustained_load_{mode}_published.jsonl'
+            observed_path = RESULTS_DIR / f'sustained_load_{mode}_observed.jsonl'
+            published = read_jsonl(published_path, RECORDS_PER_MODE)
+            stored_identities = persisted_identities(client, RUN_IDS[mode])
+            write_jsonl(observed_path, stored_identities)
+            stored_identities = read_jsonl(observed_path, len(stored_identities))
+            mismatch = None
+            try:
+                identity_result = reconcile(published, stored_identities, topic=TOPICS[mode],
+                                            run_id=RUN_IDS[mode], offsets=results[mode]['offsets'],
+                                            expected_count=RECORDS_PER_MODE, partitions=PARTITIONS)
+            except IdentityMismatch as exc:
+                identity_result = exc.result
+                mismatch = exc
+            raw_exit = os.environ.get(f'M3_LOAD_{mode.upper()}_EXIT')
+            exit_status = int(raw_exit) if raw_exit is not None else None
+            count_mismatch = count != RECORDS_PER_MODE
+            cycle_mismatch = observed != expected
+            record = evidence('sustained_load', run_id=RUN_IDS[mode], topic=TOPICS[mode],
+                              consumer_group=results[mode]['consumer_group'], partition=None,
+                              worker_exit_status=exit_status,
+                              scenario_status='failed' if mismatch or count_mismatch or cycle_mismatch or (exit_status is not None and exit_status != 0) else ('passed' if exit_status == 0 else 'incomplete'),
+                              artifact_root=RESULTS_DIR, expected_count=RECORDS_PER_MODE,
+                              compose_project=os.environ.get('M3_PROJECT'), git_commit=os.environ.get('GITHUB_SHA'),
+                              expected_identity_artifact=published_path.name, observed_identity_artifact=observed_path.name,
+                              identity_reconciliation=identity_result, partition_offsets=results[mode]['offsets'],
+                              throughput_records_per_second=results[mode]['records_per_second'],
+                              successful_application_write_calls=results[mode]['write_latency_ms']['calls'],
+                              total_http_write_attempts=None,
+                              repeated_writes_of_identical_points=None)
+            write_json(RESULTS_DIR / f'sustained_load_{mode}.json', record)
+            if mismatch:
+                raise mismatch
+            if count_mismatch:
                 raise AssertionError(
                     f"{mode} expected {RECORDS_PER_MODE} persisted points, found {count}"
                 )
+            if cycle_mismatch:
+                raise AssertionError(f"{mode} point cycle identities do not match published identities")
             results[mode]["persisted_points"] = count
+            results[mode]["identity_reconciliation"] = {
+                "run_id": RUN_IDS[mode], "identity_scope": "measurement, all tags and timestamp",
+                "expected_cycles": expected, "observed_cycles": observed,
+                "missing_cycles": sorted(set(expected) - set(observed)),
+                "unexpected_cycles": sorted(set(observed) - set(expected)),
+                "duplicate_observed_cycles": len(observed) - len(set(observed)),
+                "full_point_identity_comparison": identity_result,
+            }
 
     report = {
         "workload": publisher,
@@ -194,6 +272,11 @@ def verify() -> None:
             "performance_claim": "not asserted; one isolated CI run is indicative only",
         },
     }
+    aggregate_record = aggregate(RESULTS_DIR, project=os.environ.get('M3_PROJECT'),
+                                 commit=os.environ.get('GITHUB_SHA'), expected_count=3000)
+    write_json(RESULTS_DIR / 'sustained_load.json', aggregate_record)
+    if aggregate_record['scenario_status'] != 'passed':
+        raise AssertionError(f'Sustained-load aggregate is {aggregate_record["scenario_status"]}')
     (RESULTS_DIR / "sustained-load-report.json").write_text(
         json.dumps(report, indent=2, sort_keys=True), encoding="utf-8"
     )
@@ -208,4 +291,20 @@ def verify() -> None:
 if __name__ == "__main__":
     if len(sys.argv) != 2 or sys.argv[1] not in {"publish", "verify"}:
         raise SystemExit("usage: module3_sustained_load_probe.py publish|verify")
-    publish() if sys.argv[1] == "publish" else verify()
+    if sys.argv[1] == 'publish':
+        publish()
+    else:
+        try:
+            verify()
+        except Exception as exc:
+            for mode in ('legacy', 'batch'):
+                path = RESULTS_DIR / f'sustained_load_{mode}.json'
+                if not path.exists():
+                    write_json(path, evidence('sustained_load', run_id=RUN_IDS[mode], topic=TOPICS[mode],
+                                              scenario_status='incomplete', error_type=type(exc).__name__,
+                                              error=str(exc), compose_project=os.environ.get('M3_PROJECT'),
+                                              git_commit=os.environ.get('GITHUB_SHA')))
+            write_json(RESULTS_DIR / 'sustained_load.json',
+                       aggregate(RESULTS_DIR, project=os.environ.get('M3_PROJECT'),
+                                 commit=os.environ.get('GITHUB_SHA'), expected_count=3000))
+            raise
