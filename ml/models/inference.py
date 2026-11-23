@@ -47,8 +47,15 @@ class RULInferenceEngine:
         if not np.isfinite(window).all():
             raise ValueError("Inference window contains non-finite values")
         x = torch.from_numpy(window).float().unsqueeze(0).to(self.device)  # (1, window, features)
+        if not torch.isfinite(x).all():
+            raise ValueError("Inference window contains non-finite values after conversion")
         with torch.no_grad():
-            pred = self.model(x).item()
+            output = self.model(x)
+        if not isinstance(output, torch.Tensor) or output.shape != (1,):
+            raise ValueError("Model output must have shape (1,)")
+        if not torch.isfinite(output).all():
+            raise ValueError("Model output contains non-finite values")
+        pred = output.item()
         return max(0.0, pred)  # RUL can't be negative
 
     def predict_batch(self, windows: np.ndarray) -> np.ndarray:
@@ -61,8 +68,15 @@ class RULInferenceEngine:
         if not np.isfinite(windows).all():
             raise ValueError("Inference batch contains non-finite values")
         x = torch.from_numpy(windows).float().to(self.device)
+        if not torch.isfinite(x).all():
+            raise ValueError("Inference batch contains non-finite values after conversion")
         with torch.no_grad():
-            preds = self.model(x).cpu().numpy()
+            output = self.model(x)
+        if not isinstance(output, torch.Tensor) or output.shape != (len(windows),):
+            raise ValueError(f"Model output must have shape ({len(windows)},)")
+        if not torch.isfinite(output).all():
+            raise ValueError("Model output contains non-finite values")
+        preds = output.cpu().numpy()
         return np.clip(preds, a_min=0.0, a_max=None)
 
     def benchmark_latency(self, n_calls: int = 100) -> dict:
