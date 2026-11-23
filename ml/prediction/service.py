@@ -133,7 +133,10 @@ class PredictionService:
         missing = [column for column in FEATURE_COLUMNS if column not in record]
         if missing:
             raise ValueError(f"Feature record is missing columns: {missing}")
-        return np.asarray([float(record[column]) for column in FEATURE_COLUMNS], dtype=np.float32)
+        values = np.asarray([float(record[column]) for column in FEATURE_COLUMNS], dtype=np.float32)
+        if not np.isfinite(values).all():
+            raise ValueError("Feature vector contains non-finite values")
+        return values
 
     def predict_records(
         self,
@@ -142,10 +145,11 @@ class PredictionService:
         run_id: str,
         records: list[dict[str, Any]],
     ) -> float | None:
+        vectors = [self._vector(record) for record in records]
         key = self._key(dataset_id, unit_id, run_id)
         window = self._window_for_key(key)
-        for record in records:
-            window.append(self._vector(record))
+        for vector in vectors:
+            window.append(vector)
         if len(window) < WINDOW_SIZE:
             return None
         return self.engine.predict(np.stack(window))
@@ -287,9 +291,6 @@ class PredictionService:
             raise ValueError("cycle must be a positive integer")
         key = self._key(dataset_id, unit_id, run_id)
         previous_cycle = self.last_cycles.get(key)
-        if previous_cycle is not None and cycle <= previous_cycle:
-            logger.warning("Skipping duplicate/out-of-order prediction cycle %s for %s", cycle, key)
-            return None
         feature_order = record.get("feature_order")
         if feature_order is not None and feature_order != FEATURE_COLUMNS:
             raise ValueError("Preprocessed feature_order does not match the raw checkpoint")
@@ -297,6 +298,11 @@ class PredictionService:
         if len(values) != len(FEATURE_COLUMNS):
             raise ValueError(f"Expected {len(FEATURE_COLUMNS)} preprocessed features")
         vector_record = dict(zip(FEATURE_COLUMNS, values))
+        # Validate before clearing a gap, updating cycles, or evicting a window.
+        self._vector(vector_record)
+        if previous_cycle is not None and cycle <= previous_cycle:
+            logger.warning("Skipping duplicate/out-of-order prediction cycle %s for %s", cycle, key)
+            return None
         if previous_cycle is not None and cycle != previous_cycle + 1:
             logger.warning("Cycle gap for %s; restarting prediction warm-up at %s", key, cycle)
             self._window_for_key(key).clear()

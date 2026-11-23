@@ -1,0 +1,115 @@
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: '2181'
+      ZOOKEEPER_TICK_TIME: '2000'
+    healthcheck:
+      test: ['CMD-SHELL', "echo srvr | nc -w 2 127.0.0.1 2181 | grep -Eq '^Mode: (standalone|leader|follower)'"]
+      interval: 5s
+      timeout: 4s
+      retries: 24
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: '1'
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: '1'
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
+    healthcheck:
+      test: ['CMD-SHELL', 'kafka-topics --bootstrap-server kafka:9092 --list >/dev/null 2>&1']
+      interval: 5s
+      timeout: 10s
+      retries: 24
+  topic-init:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ['/bin/bash', '-ec']
+    command:
+      - |
+        for topic in m6-test-input m6-test-output; do
+          kafka-topics --bootstrap-server kafka:9092 --create --topic "$$topic" --partitions 1 --replication-factor 1
+        done
+  influx:
+    image: influxdb:2.7
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: m6test
+      DOCKER_INFLUXDB_INIT_PASSWORD: m6-test-password-only
+      DOCKER_INFLUXDB_INIT_ORG: m6-test-org
+      DOCKER_INFLUXDB_INIT_BUCKET: m6-test-bucket
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: m6-test-token-only
+    volumes:
+      - influx-data:/var/lib/influxdb2
+      - influx-config:/etc/influxdb2
+    healthcheck:
+      test: ['CMD', 'influx', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 24
+  worker:
+    build:
+      context: .
+      dockerfile: tests/module06.Dockerfile
+    depends_on:
+      topic-init:
+        condition: service_completed_successfully
+      influx:
+        condition: service_healthy
+    command: ['python', '/app/tests/module06_integration_worker.py']
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      PREDICTION_INPUT_TOPIC: m6-test-input
+      PREDICTION_OUTPUT_TOPIC: m6-test-output
+      PREDICTION_CONSUMER_GROUP: ${M6_GROUP:?M6_GROUP required}
+      PREDICTION_CHECKPOINT_PATH: /checkpoint/state.sqlite
+      RUL_CHECKPOINT_PATH: /model/lstm_raw_20260626T082955Z.pt
+      PREPROCESSING_ARTIFACT_DIR: /scalers
+      INFLUXDB_URL: http://influx:8086
+      INFLUXDB_TOKEN: m6-test-token-only
+      INFLUXDB_ORG: m6-test-org
+      INFLUXDB_BUCKET: m6-test-bucket
+    volumes:
+      - checkpoint:/checkpoint
+      - type: bind
+        source: ${M6_MODEL_PATH:?M6_MODEL_PATH required}
+        target: /model/lstm_raw_20260626T082955Z.pt
+        read_only: true
+      - type: bind
+        source: ${M6_SCALER_DIR:?M6_SCALER_DIR required}
+        target: /scalers
+        read_only: true
+  probe:
+    build:
+      context: .
+      dockerfile: tests/module06.Dockerfile
+    depends_on:
+      worker:
+        condition: service_started
+    command: ['python', '/app/tests/module06_integration_probe.py']
+    environment:
+      M6_GROUP: ${M6_GROUP:?M6_GROUP required}
+    volumes:
+      - checkpoint:/checkpoint:ro
+      - type: bind
+        source: ${M6_MODEL_PATH:?M6_MODEL_PATH required}
+        target: /model/lstm_raw_20260626T082955Z.pt
+        read_only: true
+      - type: bind
+        source: ${M6_SCALER_DIR:?M6_SCALER_DIR required}
+        target: /scalers
+        read_only: true
+volumes:
+  checkpoint: {}
+  influx-data: {}
+  influx-config: {}
+networks:
+  default:
+    internal: true
